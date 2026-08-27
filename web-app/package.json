@@ -1,0 +1,17 @@
+{
+  "name": "artifact-web-app",
+  "version": "1.0.0",
+  "description": "Artifact web app — hero prop pipeline UI",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

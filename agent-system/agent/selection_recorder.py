@@ -68,7 +68,10 @@ class SelectionRecorderAgent:
                 name="selection_recorder_agent",
                 instruction="You are a data validation and audit logging assistant. Record and validate the selected option and rationale.",
             )
-            runner = InMemoryRunner(agent=adk_agent)
+            runner = InMemoryRunner(agent=adk_agent, app_name="artifact")
+            await runner.session_service.create_session(
+                app_name="artifact", user_id="default_user", session_id=prop.id
+            )
             prompt = (
                 f"Audit selection decision for Prop: {prop.id}.\n"
                 f"Chosen Option ID: {chosen_option_id}\n"

@@ -27,7 +27,7 @@ class ImageJobRunner(abc.ABC):
         prop_id: str,
         job_id: str,
         options: list[Any],
-    ) -> None:
+    ) -> dict[str, list[str]]:
         """Enqueue a Nano Banana 2 generation job for all concept options."""
         ...
 
@@ -37,7 +37,7 @@ class ImageJobRunner(abc.ABC):
         prop_id: str,
         job_id: str,
         chosen_option_id: str,
-    ) -> None:
+    ) -> dict[str, list[str]]:
         """Enqueue a Nano Banana Pro generation job for the selected option's final assets."""
         ...
 
@@ -89,8 +89,6 @@ class GCSImageJobRunner(ImageJobRunner):
                 logger.error("NB2 generation failed for option %s: %s", opt.id, exc)
                 image_refs_by_option[opt.id] = []
 
-        # Notify the orchestrator that the job is done.
-        from agent.orchestrator import Orchestrator  # imported lazily to avoid cycles
         # In production, the job would POST back to the API; here we call directly.
         logger.info("Options job %s complete for prop %s", job_id, prop_id)
         return image_refs_by_option  # caller (API callback handler) feeds this to complete_stage1
@@ -100,11 +98,12 @@ class GCSImageJobRunner(ImageJobRunner):
         prop_id: str,
         job_id: str,
         chosen_option_id: str,
-    ) -> None:
+    ) -> dict[str, list[str]]:
         """
         Generate the full asset package (turnaround, detail callouts, variants)
         with Nano Banana Pro (full-res, seed-locked for consistency).
         """
+        import hashlib
         from config import GCS_BUCKET_NAME, NBPRO_MODEL, NBPRO_RESOLUTION
 
         prop = await self._repo.get(prop_id)
@@ -119,7 +118,7 @@ class GCSImageJobRunner(ImageJobRunner):
             f"Style: {chosen_opt.rationale if chosen_opt else ''}"
         )
 
-        seed = abs(hash(prop_id)) % (2 ** 31)  # deterministic seed for consistency
+        seed = int(hashlib.sha256(prop_id.encode()).hexdigest(), 16) % (2 ** 31)  # deterministic seed for consistency
 
         asset_refs: dict[str, list[str]] = {
             "turnaround": [],
@@ -198,6 +197,8 @@ class GCSImageJobRunner(ImageJobRunner):
             prompt=prompt,
             config=genai_types.GenerateImagesConfig(
                 number_of_images=1,
+                aspect_ratio="1:1",
+                output_mime_type="image/png",
                 seed=seed,
             ),
         )

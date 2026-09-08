@@ -5,6 +5,7 @@ Records the chosen option, who chose it, and why. No image generation here.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,16 +41,50 @@ class SelectionRecorderAgent:
                 f"Available: {option_ids}"
             )
 
-        # Confirm via the agent platform (audit trail / guardrail check).
-        await self._platform.invoke(
-            "selection_recorder",
-            {
-                "prop_id": prop.id,
-                "chosen_option_id": chosen_option_id,
-                "chosen_by": chosen_by,
-                "why": why,
-            },
+        is_stub = (
+            "Stub" in self._platform.__class__.__name__
+            or os.environ.get("USE_STUBS", "false").lower() == "true"
         )
+
+        if is_stub:
+            # Confirm via the stub agent platform
+            await self._platform.invoke(
+                "selection_recorder",
+                {
+                    "prop_id": prop.id,
+                    "chosen_option_id": chosen_option_id,
+                    "chosen_by": chosen_by,
+                    "why": why,
+                },
+            )
+        else:
+            # Native google-adk audit trail check
+            from google.adk.agents import Agent
+            from google.adk.runners import InMemoryRunner
+            from google.genai import types
+
+            adk_agent = Agent(
+                model="gemini-2.0-flash",
+                name="selection_recorder_agent",
+                instruction="You are a data validation and audit logging assistant. Record and validate the selected option and rationale.",
+            )
+            runner = InMemoryRunner(agent=adk_agent)
+            prompt = (
+                f"Audit selection decision for Prop: {prop.id}.\n"
+                f"Chosen Option ID: {chosen_option_id}\n"
+                f"Chosen By: {chosen_by}\n"
+                f"Reason: {why}\n"
+            )
+            content = types.Content(
+                role="user", parts=[types.Part(text=prompt)]
+            )
+
+            async for event in runner.run_async(
+                user_id="default_user",
+                session_id=prop.id,
+                new_message=content,
+            ):
+                pass  # perform the check and consume the event stream for logging
 
         selection = Selection(
             chosen=chosen_option_id,

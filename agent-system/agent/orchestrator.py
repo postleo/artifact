@@ -51,12 +51,20 @@ class Orchestrator:
     async def start_stage1(self, prop_id: str, n_options: int) -> str:
         """
         Transition prop to generating_options, produce option rationales,
-        and enqueue a Nano Banana 2 image job per option.
-        Returns a job handle.
+        and prepare a job handle for image generation.
         """
         prop = await self._repo.get(prop_id)
         if prop is None:
             raise ValueError(f"Prop {prop_id!r} not found")
+
+        # Pre-flight budget check
+        from config import COST_PER_NB2_IMAGE_USD
+        projected = prop.cost.est_usd + (n_options * COST_PER_NB2_IMAGE_USD)
+        if projected > prop.budget_ceiling_usd:
+            await self._repo.transition(prop_id, PropStatus.BUDGET_EXCEEDED)
+            raise ValueError(
+                f"Projected cost (${projected:.2f}) exceeds budget ceiling (${prop.budget_ceiling_usd:.2f})."
+            )
 
         await self._repo.transition(prop_id, PropStatus.GENERATING_OPTIONS)
 
@@ -72,17 +80,32 @@ class Orchestrator:
         prop = await self._repo.get(prop_id)
         options = await self._options_agent.generate_options(prop, n_options)
         prop.options = options
-        await self._repo.update(prop)
-
-        # Enqueue one image generation job per option (Nano Banana 2).
+        
         job_id = f"job_{uuid.uuid4().hex[:8]}"
-        await self._image_runner.enqueue_options_job(prop_id, job_id, options)
-
         prop.job_id = job_id
         await self._repo.update(prop)
 
         logger.info("Stage 1 started for prop %s, job %s", prop_id, job_id)
         return job_id
+
+    async def run_stage1_pipeline(self, prop_id: str, n_options: int, job_id: str) -> None:
+        """
+        Runs the async image generation job and completes Stage 1.
+        Suitable for FastAPI BackgroundTasks.
+        """
+        try:
+            prop = await self._repo.get(prop_id)
+            if prop is None:
+                return
+            
+            # Generate and wait for draft images
+            image_refs = await self._image_runner.enqueue_options_job(prop_id, job_id, prop.options)
+            
+            # Complete stage 1
+            await self.complete_stage1(prop_id, image_refs)
+        except Exception as exc:
+            logger.error("Stage 1 background pipeline failed for prop %s: %s", prop_id, exc, exc_info=True)
+            await self._repo.transition(prop_id, PropStatus.FAILED_OPTIONS)
 
     async def complete_stage1(self, prop_id: str, image_refs_by_option: dict[str, list[str]]) -> None:
         """
@@ -94,6 +117,7 @@ class Orchestrator:
         if prop is None:
             raise ValueError(f"Prop {prop_id!r} not found")
 
+        # Mutate option objects locally
         for opt in prop.options:
             opt.image_refs = image_refs_by_option.get(opt.id, [])
 
@@ -107,10 +131,12 @@ class Orchestrator:
         if tm_result != "none":
             prop.flags.trademark_risk = tm_result
 
+        # Write mutated options and flags back to Firestore before moving forward
+        await self._repo.update(prop)
+
         # Update cost.
         n_images = len(all_refs)
         await self._cost.record_nb2(prop_id, n_images)
-        prop = await self._repo.get(prop_id)
 
         await self._repo.transition(prop_id, PropStatus.AWAITING_OPTIONS_REVIEW)
         logger.info("Stage 1 complete for prop %s (%d images)", prop_id, n_images)
@@ -125,8 +151,12 @@ class Orchestrator:
         chosen_option_id: str,
         chosen_by: str,
         why: str,
-    ) -> Selection:
-        """Gate 2: record the chosen option. Refuses if not at awaiting_options_review."""
+    ) -> None:
+        """
+        Record the user's selected concept direction and rationale.
+        Enforces status gate: must be 'awaiting_options_review'.
+        Transitions prop to 'selection_confirmed'.
+        """
         prop = await self._repo.get(prop_id)
         if prop is None:
             raise ValueError(f"Prop {prop_id!r} not found")
@@ -145,18 +175,14 @@ class Orchestrator:
         await self._repo.update(prop)
         await self._repo.transition(prop_id, PropStatus.SELECTION_CONFIRMED)
 
-        logger.info("Selection recorded for prop %s: option %s", prop_id, chosen_option_id)
-        return selection
-
     # ------------------------------------------------------------------
-    # Stage 3 — Asset Finisher
+    # Stage 3 — Finalization
     # ------------------------------------------------------------------
 
     async def start_stage3(self, prop_id: str) -> str:
         """
-        Gate check + start Stage 3. Refuses if selection is not confirmed.
-        Triggers Nano Banana Pro image job for the selected option.
-        Returns a job handle.
+        Transition prop to generating_final, produce final specs,
+        and prepare job handle for Nano Banana Pro turnaround images.
         """
         prop = await self._repo.get(prop_id)
         if prop is None:
@@ -183,18 +209,34 @@ class Orchestrator:
         prop = await self._repo.get(prop_id)
         prop.final_assets.material_spec = spec_texts["material_spec"]
         prop.final_assets.build_spec = spec_texts["build_spec"]
-        await self._repo.update(prop)
-
-        # Enqueue Nano Banana Pro image job.
+        
         job_id = f"job_{uuid.uuid4().hex[:8]}"
-        if prop.selection:
-            await self._image_runner.enqueue_final_job(prop_id, job_id, prop.selection.chosen)
-
         prop.job_id = job_id
         await self._repo.update(prop)
 
         logger.info("Stage 3 started for prop %s, job %s", prop_id, job_id)
         return job_id
+
+    async def run_stage3_pipeline(self, prop_id: str, job_id: str) -> None:
+        """
+        Runs the async final image generation job and completes Stage 3.
+        Suitable for FastAPI BackgroundTasks.
+        """
+        try:
+            prop = await self._repo.get(prop_id)
+            if prop is None:
+                return
+
+            # Enqueue high-res seed-locked generation
+            asset_refs = {}
+            if prop.selection:
+                asset_refs = await self._image_runner.enqueue_final_job(prop_id, job_id, prop.selection.chosen)
+
+            # Complete stage 3
+            await self.complete_stage3(prop_id, asset_refs)
+        except Exception as exc:
+            logger.error("Stage 3 background pipeline failed for prop %s: %s", prop_id, exc, exc_info=True)
+            await self._repo.transition(prop_id, PropStatus.FAILED_FINAL)
 
     async def complete_stage3(self, prop_id: str, asset_refs: dict[str, list[str]]) -> None:
         """
@@ -213,6 +255,8 @@ class Orchestrator:
         # Moderation on every final image.
         all_refs = [r for refs in asset_refs.values() for r in refs]
         mod_result = await self._safety.moderate_images(all_refs)
+        
+        # Save moderation flag
         prop = await self._repo.get(prop_id)
         prop.flags.moderation = mod_result
         await self._repo.update(prop)

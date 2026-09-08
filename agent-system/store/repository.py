@@ -90,11 +90,13 @@ class FirestorePropRepository(PropRepository):
     async def transition(
         self, prop_id: str, target_status: PropStatus
     ) -> PropRecord:
+        from google.cloud import firestore  # type: ignore
         doc_ref = self._col.document(prop_id)
+        transaction = self._db.transaction()
 
-        @self._db.transaction
-        async def _txn(transaction):  # type: ignore
-            snapshot = await doc_ref.get(transaction=transaction)
+        @firestore.async_transactional
+        async def _txn(txn):  # type: ignore
+            snapshot = await doc_ref.get(transaction=txn)
             if not snapshot.exists:
                 raise ValueError(f"Prop {prop_id!r} not found")
             data = snapshot.to_dict()
@@ -102,10 +104,10 @@ class FirestorePropRepository(PropRepository):
             assert_valid_transition(current, target_status)
             data["status"] = target_status.value
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
-            transaction.set(doc_ref, data)
+            txn.set(doc_ref, data)
             return PropRecord(**data)
 
-        return await _txn()  # type: ignore
+        return await _txn(transaction)
 
     async def list_by_status(self, status: PropStatus) -> List[PropRecord]:
         query = self._col.where("status", "==", status.value)
@@ -127,25 +129,28 @@ class FirestorePropRepository(PropRepository):
 # ---------------------------------------------------------------------------
 
 class InMemoryPropRepository(PropRepository):
-    """Thread-unsafe in-memory store — suitable for unit tests only."""
+    """Thread-unsafe in-memory store — suitable for unit tests and local CLI."""
 
     def __init__(self) -> None:
         self._props: dict[str, PropRecord] = {}
         self._idem_keys: set[str] = set()
 
     async def get(self, prop_id: str) -> Optional[PropRecord]:
-        return self._props.get(prop_id)
+        prop = self._props.get(prop_id)
+        if prop is None:
+            return None
+        return prop.model_copy(deep=True)
 
     async def create(self, prop: PropRecord) -> PropRecord:
         prop.created_at = datetime.now(timezone.utc)
         prop.updated_at = datetime.now(timezone.utc)
-        self._props[prop.id] = prop
-        return prop
+        self._props[prop.id] = prop.model_copy(deep=True)
+        return prop.model_copy(deep=True)
 
     async def update(self, prop: PropRecord) -> PropRecord:
         prop.updated_at = datetime.now(timezone.utc)
-        self._props[prop.id] = prop
-        return prop
+        self._props[prop.id] = prop.model_copy(deep=True)
+        return prop.model_copy(deep=True)
 
     async def transition(
         self, prop_id: str, target_status: PropStatus
@@ -156,7 +161,8 @@ class InMemoryPropRepository(PropRepository):
         assert_valid_transition(prop.status, target_status)
         prop.status = target_status
         prop.updated_at = datetime.now(timezone.utc)
-        return prop
+        self._props[prop_id] = prop.model_copy(deep=True)
+        return prop.model_copy(deep=True)
 
     async def list_by_status(self, status: PropStatus) -> List[PropRecord]:
         return [p for p in self._props.values() if p.status == status]

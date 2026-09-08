@@ -51,6 +51,19 @@ Swagger UI: `http://localhost:8080/docs`.
 
 ---
 
+## 🎨 Interactive CLI Mode (Standalone/No-Server Utility)
+
+In addition to running as a REST API server, you can execute the entire hero prop design pipeline interactively in your terminal! This tool is 100% self-contained and allows you to test briefs, review concepts, make gates selections, and compile specs offline.
+
+To start the interactive CLI, run:
+```bash
+# Set stub mode to true to run offline with local stubs
+USE_STUBS=true python cli.py
+```
+This script will guide you through entering the prop's brief, generating draft concepts, picking an option, and writing build-ready specification dossiers in a beautiful terminal dashboard.
+
+---
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -192,13 +205,13 @@ budget_exceeded (resume after approval)
 
 ---
 
-## Cost strategy
+## Image Model Strategy & Resolution Scaling
 
-- **Concept options** render with **Imagen 4 Fast** (`imagen-4.0-fast-generate-001`) at draft resolution.
-- **Final assets** render with **Imagen 4 Standard** (`imagen-4.0-generate-001`) at full resolution — only for the *selected* prop.
+- **Concept Draft Options** (minor flows) are generated using the **Nano Banana 2** model at draft resolution for rapid, high-speed iteration.
+- **Final Hero Assets** (key flows) are generated using the **Nano Banana Pro** model at full, high-fidelity resolution—unlocked specifically for the *selected* prop design.
 - Image results are cached by `prop_id/option_id`; retries reuse prior images.
-- Each prop carries a `budget_ceiling_usd`; generation pauses if the ceiling is exceeded.
-- `cost.est_usd` is surfaced on the status board so the team can see spend in real time.
+- Each prop carries a `budget_ceiling_usd` parameter; generation automatically pauses if cumulative operations exceed this ceiling, requiring explicit crew approval to continue.
+- Cumulative resource usage indicators are surfaced directly in the Studio status board to allow the team to monitor project workloads in real time.
 
 ---
 
@@ -208,7 +221,7 @@ budget_exceeded (resume after approval)
 |------|----------|-------|
 | Fast reasoning | `gemini-2.0-flash` | Orchestration, parsing, brief writing |
 | Strong reasoning | `gemini-2.5-pro` | Hard reasoning only, escalated selectively |
-| Concept draft images (Nano Banana 2) | `gemini-3.1-flash-image` | Fast, low-cost concept options |
+| Concept draft images (Nano Banana 2) | `gemini-3.1-flash-image` | Fast, rapid draft concept options |
 | Final hero images (Nano Banana Pro) | `gemini-3-pro-image` | High-fidelity final assets |
 
 All IDs default-coded in `config.py` and overridable via environment variables.

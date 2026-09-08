@@ -45,7 +45,7 @@ class CostService:
                 prop.budget_ceiling_usd,
                 prop.cost.est_usd,
             )
-            prop.flags.moderation = prop.flags.moderation  # no-op — flags already set elsewhere
+            prop.flags.budget_exceeded = True
             # Budget flag is surfaced via prop.cost.est_usd > prop.budget_ceiling_usd
             # The orchestrator checks this before starting Stage 3 and transitions to BUDGET_EXCEEDED.
 

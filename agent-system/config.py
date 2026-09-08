@@ -21,14 +21,14 @@ GEMINI_PRO_MODEL: str = os.environ.get("GEMINI_PRO_MODEL", "gemini-2.5-pro")
 
 # ---------------------------------------------------------------------------
 # Image generation models
-# "Nano Banana 2"  → fast, cheap concept drafts.
-# "Nano Banana Pro" → high-fidelity final hero assets.
+# "Nano Banana 2"  → fast, cheap concept drafts (Imagen Fast).
+# "Nano Banana Pro" → high-fidelity final hero assets (Imagen High Quality).
 # ---------------------------------------------------------------------------
 # Nano Banana 2 — fast, low-cost; used for concept-option drafts.
-NB2_MODEL: str = os.environ.get("NB2_MODEL", "gemini-3.1-flash-image")
+NB2_MODEL: str = os.environ.get("NB2_MODEL", "imagen-3.0-fast-generate-001")
 
 # Nano Banana Pro — high fidelity; used only for the selected prop's final assets.
-NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "gemini-3-pro-image")
+NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "imagen-3.0-generate-002")
 
 # ---------------------------------------------------------------------------
 # Image resolution settings

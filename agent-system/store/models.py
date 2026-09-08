@@ -109,6 +109,7 @@ class CostRecord(BaseModel):
 class Flags(BaseModel):
     trademark_risk: str = "none"   # "none" | "low" | "high"
     moderation: str = "clean"      # "clean" | "flagged"
+    budget_exceeded: bool = False
 
 
 # ---------------------------------------------------------------------------

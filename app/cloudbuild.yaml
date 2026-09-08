@@ -1,0 +1,15 @@
+# Build the frontend image, baking VITE_BACKEND_URL into the bundle.
+# Usage:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions _VITE_BACKEND_URL=https://<backend>/api,_IMAGE=<region>-docker.pkg.dev/<proj>/<repo>/artifact-frontend:latest .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - VITE_BACKEND_URL=${_VITE_BACKEND_URL}
+      - -t
+      - ${_IMAGE}
+      - .
+images:
+  - ${_IMAGE}

@@ -55,7 +55,18 @@ class GCSImageJobRunner(ImageJobRunner):
 
     def __init__(self, repo: Any, storage_client: Any) -> None:
         from google import genai  # type: ignore  (google-genai unified SDK)
-        self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+        # Honor Vertex AI mode (consistent with the rest of the system) when
+        # GOOGLE_GENAI_USE_VERTEXAI is set; otherwise use a Gemini API key.
+        use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true", "yes")
+        if use_vertex:
+            self._client = genai.Client(
+                vertexai=True,
+                project=os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT"),
+                location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+            )
+        else:
+            self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         self._repo = repo
         self._storage = storage_client  # google.cloud.storage.Client
 

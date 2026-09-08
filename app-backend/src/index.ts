@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import http from 'http';
 import https from 'https';
@@ -23,14 +25,48 @@ const corsOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((o) =
 app.use(cors({ origin: corsOrigins }));
 app.use(express.json());
 
-// Optional bearer auth for this backend's API. Enabled only when APP_API_TOKEN is
-// set (leave unset in local dev). Guards the money-spending proxy routes.
-const APP_API_TOKEN = process.env.APP_API_TOKEN || '';
+// ---------------------------------------------------------------------------
+// Authentication: password login -> short-lived signed JWT.
+// The access password and JWT signing secret live ONLY on the backend; nothing
+// secret ships to the browser. Auth is enforced only when both are configured
+// (leave unset in local dev to disable).
+// ---------------------------------------------------------------------------
+const APP_ACCESS_PASSWORD = process.env.APP_ACCESS_PASSWORD || '';
+const APP_JWT_SECRET = process.env.APP_JWT_SECRET || '';
+const AUTH_ENABLED = Boolean(APP_ACCESS_PASSWORD && APP_JWT_SECRET);
+const JWT_TTL_SECONDS = 60 * 60 * 12; // 12 hours
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+// Public: exchange the shared password for a JWT.
+app.post('/api/login', (req, res) => {
+  if (!AUTH_ENABLED) return res.json({ token: 'dev', authDisabled: true });
+  const password = (req.body && req.body.password) as unknown;
+  if (typeof password !== 'string' || !safeEqual(password, APP_ACCESS_PASSWORD)) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  const token = jwt.sign({ role: 'studio' }, APP_JWT_SECRET, { expiresIn: JWT_TTL_SECONDS });
+  return res.json({ token, expiresIn: JWT_TTL_SECONDS });
+});
+
+// Guard every other /api route with a valid Bearer JWT (when auth is enabled).
 app.use('/api', (req, res, next) => {
-  if (!APP_API_TOKEN) return next(); // auth disabled in dev
+  if (!AUTH_ENABLED) return next(); // auth disabled in dev
+  if (req.path === '/login') return next(); // login is public
   const auth = req.header('authorization') || '';
-  if (auth === `Bearer ${APP_API_TOKEN}`) return next();
-  return res.status(401).json({ error: 'Unauthorized' });
+  const match = auth.match(/^Bearer (.+)$/);
+  if (!match) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    jwt.verify(match[1], APP_JWT_SECRET);
+    return next();
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 
 // Helper for agent authorization headers

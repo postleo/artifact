@@ -11,6 +11,8 @@ import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
 import { getPropArtwork } from './utils/propVisuals';
 import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps } from './services/studioApi';
+import { isAuthenticated } from './services/auth';
+import { LoginScreen } from './components/LoginScreen';
 import { Sparkles, Layers } from 'lucide-react';
 
 export default function App() {
@@ -36,8 +38,21 @@ export default function App() {
   const [activePropId, setActivePropId] = useState<string>('');
   const [currentTab, setCurrentTab] = useState<ActiveTab>('catalogue');
 
-  // Load persisted studio state (profile + props) from the backend DB on mount.
+  // Auth gate: user must log in (password -> backend JWT) before using the studio.
+  const [authed, setAuthed] = useState<boolean>(() => isAuthenticated());
+
+  // If any API call gets a 401, the auth service clears the token and fires this
+  // event; drop back to the login screen.
   useEffect(() => {
+    const onUnauthorized = () => setAuthed(false);
+    window.addEventListener('artifact-unauthorized', onUnauthorized);
+    return () => window.removeEventListener('artifact-unauthorized', onUnauthorized);
+  }, []);
+
+  // Load persisted studio state (profile + props) from the backend DB on mount
+  // (only once authenticated).
+  useEffect(() => {
+    if (!authed) return;
     let cancelled = false;
     (async () => {
       try {
@@ -62,7 +77,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authed]);
 
   // Dual view mode: 'vitrine' (museum showcase) vs 'photo_artifact' (clean production photo)
   const [viewMode, setViewMode] = useState<PropViewMode>(() => {
@@ -400,6 +415,11 @@ export default function App() {
       </div>
     </div>
   );
+
+  // Gate the entire studio behind login.
+  if (!authed) {
+    return <LoginScreen onAuthed={() => setAuthed(true)} />;
+  }
 
   return (
     <div className={`min-h-screen bg-[#F7F4EC] dark:bg-[#0D1514] flex flex-col font-sans text-[#12201F] dark:text-[#EDF5F3] transition-colors ${theme}`}>

@@ -8,6 +8,7 @@
 
 import { ScriptExtraction } from '../types';
 import { parseCustomScript } from '../data/sampleScripts';
+import { authHeader } from './auth';
 
 export interface AgentStepProgress {
   stepIndex: number;
@@ -115,7 +116,7 @@ export class ArtifactAgentSystemClient {
 
       const res = await fetch(`${this.baseUrl}/analyze-script`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ script_text: scriptText }),
         signal: controller.signal
       });

@@ -7,6 +7,7 @@ import { URL } from 'url';
 import { initDatabase } from './db.js';
 import { Profile } from './models/Profile.js';
 import { Prop } from './models/Prop.js';
+import { StudioState } from './models/StudioState.js';
 
 dotenv.config();
 
@@ -416,6 +417,49 @@ async function syncPropWithAgent(propId: string) {
     console.error(`[Sync Failure] Failed to sync ${propId}:`, error);
   }
 }
+
+// ---------------------------------------------------------------------------
+// 2a. Studio state persistence (DB-backed replacement for browser localStorage)
+// ---------------------------------------------------------------------------
+
+// Production profile (single record, stored under key 'profile').
+app.get('/api/studio/profile', async (_req, res) => {
+  try {
+    const row = await StudioState.findByPk('profile');
+    return res.json(row ? row.value : null);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/studio/profile', async (req, res) => {
+  try {
+    await StudioState.upsert({ key: 'profile', value: req.body ?? {} });
+    return res.json({ ok: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// The props slate (array), stored under key 'props'.
+app.get('/api/studio/props', async (_req, res) => {
+  try {
+    const row = await StudioState.findByPk('props');
+    return res.json(row ? row.value : []);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/studio/props', async (req, res) => {
+  try {
+    const list = Array.isArray(req.body) ? req.body : [];
+    await StudioState.upsert({ key: 'props', value: list });
+    return res.json({ ok: true, count: list.length });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 2b. Script Analysis (server-side heuristic extraction for onboarding)

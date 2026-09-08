@@ -10,50 +10,59 @@ import { DossierPage } from './components/pages/DossierPage';
 import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
 import { getPropArtwork } from './utils/propVisuals';
+import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps } from './services/studioApi';
 import { Sparkles, Layers } from 'lucide-react';
 
 export default function App() {
-  // Production profile (saved to localStorage)
-  const [productionProfile, setProductionProfile] = useState<ProductionProfile>(() => {
-    const saved = localStorage.getItem('artifact_production_info');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // ignore
-      }
-    }
-    return {
-      projectName: 'Chronicles of Aethelgard',
-      worldLore: 'Steampunk / Gilded Age of Drift',
-      departmentRole: 'Lead Prop Master',
-      leadName: 'Isla Venn',
-      startMode: 'scratch'
-    };
-  });
+  // Production profile — loaded from the backend DB on mount (see effect below).
+  const DEFAULT_PROFILE: ProductionProfile = {
+    projectName: 'Chronicles of Aethelgard',
+    worldLore: 'Steampunk / Gilded Age of Drift',
+    departmentRole: 'Lead Prop Master',
+    leadName: 'Isla Venn',
+    startMode: 'scratch'
+  };
+  const [productionProfile, setProductionProfile] = useState<ProductionProfile>(DEFAULT_PROFILE);
 
-  // Onboarding modal visibility (shows automatically on first visit)
-  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(() => {
-    return !localStorage.getItem('artifact_onboarding_completed');
-  });
+  // Onboarding modal visibility — opened after load if no profile exists in the DB.
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
 
-  // Props list: persisted in localStorage; supports starting from scratch (empty array)
-  const [propsList, setPropsList] = useState<PropItem[]>(() => {
-    const savedSlate = localStorage.getItem('artifact_props_list');
-    if (savedSlate) {
-      try {
-        return JSON.parse(savedSlate);
-      } catch (e) {
-        // ignore
-      }
-    }
-    return INITIAL_PROPS;
-  });
+  // True while the initial studio state is being fetched from the backend.
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const [activePropId, setActivePropId] = useState<string>(() => {
-    return propsList.length > 0 ? propsList[0].id : 'ARF-00123';
-  });
+  // Props list: persisted in the backend DB (loaded on mount).
+  const [propsList, setPropsList] = useState<PropItem[]>([]);
+
+  const [activePropId, setActivePropId] = useState<string>('');
   const [currentTab, setCurrentTab] = useState<ActiveTab>('catalogue');
+
+  // Load persisted studio state (profile + props) from the backend DB on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [profile, props] = await Promise.all([getStudioProfile(), getStudioProps()]);
+        if (cancelled) return;
+        if (profile) {
+          setProductionProfile(profile);
+        } else {
+          // First run — no profile persisted yet: prompt onboarding.
+          setIsOnboardingOpen(true);
+        }
+        if (props && props.length > 0) {
+          setPropsList(props);
+          setActivePropId(props[0].id);
+        }
+      } catch (e) {
+        console.error('Failed to load studio state from backend:', e);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Dual view mode: 'vitrine' (museum showcase) vs 'photo_artifact' (clean production photo)
   const [viewMode, setViewMode] = useState<PropViewMode>(() => {
@@ -106,17 +115,16 @@ export default function App() {
 
   const handleCompleteOnboarding = (profile: ProductionProfile) => {
     setProductionProfile(profile);
-    localStorage.setItem('artifact_production_info', JSON.stringify(profile));
-    localStorage.setItem('artifact_onboarding_completed', 'true');
+    void saveStudioProfile(profile);
     setIsOnboardingOpen(false);
 
     if (profile.startMode === 'scratch') {
       setPropsList([]);
-      localStorage.setItem('artifact_props_list', JSON.stringify([]));
+      void saveStudioProps([]);
       setCurrentTab('catalogue');
     } else {
       setPropsList(INITIAL_PROPS);
-      localStorage.setItem('artifact_props_list', JSON.stringify(INITIAL_PROPS));
+      void saveStudioProps(INITIAL_PROPS);
       setActivePropId('ARF-00123');
       setCurrentTab('catalogue');
     }
@@ -124,7 +132,7 @@ export default function App() {
 
   const handleResetToDemo = () => {
     setPropsList(INITIAL_PROPS);
-    localStorage.setItem('artifact_props_list', JSON.stringify(INITIAL_PROPS));
+    void saveStudioProps(INITIAL_PROPS);
     setActivePropId('ARF-00123');
     setCurrentTab('catalogue');
   };
@@ -285,7 +293,7 @@ export default function App() {
 
     const updated = [newProp, ...propsList];
     setPropsList(updated);
-    localStorage.setItem('artifact_props_list', JSON.stringify(updated));
+    void saveStudioProps(updated);
     setActivePropId(newId);
     setCurrentTab('options');
   };
@@ -293,7 +301,7 @@ export default function App() {
   const handleUpdateProp = (updatedProp: PropItem) => {
     const updated = propsList.map((p) => (p.id === updatedProp.id ? updatedProp : p));
     setPropsList(updated);
-    localStorage.setItem('artifact_props_list', JSON.stringify(updated));
+    void saveStudioProps(updated);
   };
 
   const handleSelectOptionInProofSheet = (optionId: string, notes: string) => {
@@ -323,7 +331,7 @@ export default function App() {
       return p;
     });
     setPropsList(updated);
-    localStorage.setItem('artifact_props_list', JSON.stringify(updated));
+    void saveStudioProps(updated);
     setCurrentTab('selection');
   };
 
@@ -339,7 +347,7 @@ export default function App() {
       return p;
     });
     setPropsList(updated);
-    localStorage.setItem('artifact_props_list', JSON.stringify(updated));
+    void saveStudioProps(updated);
     setCurrentTab('dossier');
   };
 
@@ -358,7 +366,7 @@ export default function App() {
       return p;
     });
     setPropsList(updated);
-    localStorage.setItem('artifact_props_list', JSON.stringify(updated));
+    void saveStudioProps(updated);
   };
 
   // Render empty prop notice if navigating to prop-specific views with 0 props
@@ -395,6 +403,14 @@ export default function App() {
 
   return (
     <div className={`min-h-screen bg-[#F7F4EC] dark:bg-[#0D1514] flex flex-col font-sans text-[#12201F] dark:text-[#EDF5F3] transition-colors ${theme}`}>
+      {isLoading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="font-mono-tag text-xs tracking-wider uppercase text-[#48605E] dark:text-[#8BA4A1]">
+            Loading studio…
+          </div>
+        </div>
+      ) : (
+      <>
       {/* Top Header with Navigation and 5-Layout Switcher */}
       <Header
         currentTab={currentTab}
@@ -493,6 +509,8 @@ export default function App() {
         onComplete={handleCompleteOnboarding}
         initialProfile={productionProfile}
       />
+      </>
+      )}
     </div>
   );
 }

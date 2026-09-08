@@ -20,15 +20,18 @@ GEMINI_FAST_MODEL: str = os.environ.get("GEMINI_FAST_MODEL", "gemini-2.0-flash")
 GEMINI_PRO_MODEL: str = os.environ.get("GEMINI_PRO_MODEL", "gemini-2.5-pro")
 
 # ---------------------------------------------------------------------------
-# Image generation models
+# Image generation models (Imagen, via the google-genai `generate_images` API)
 # "Nano Banana 2"  → fast, cheap concept drafts (Imagen Fast).
-# "Nano Banana Pro" → high-fidelity final hero assets (Imagen High Quality).
+# "Nano Banana Pro" → high-fidelity final hero assets (Imagen high quality).
+# NOTE: These are Imagen model IDs and are invoked with client.models.generate_images.
+#       Do NOT set these to Gemini image models (e.g. gemini-*-image); those use the
+#       generate_content API instead and are not compatible with this code path.
 # ---------------------------------------------------------------------------
 # Nano Banana 2 — fast, low-cost; used for concept-option drafts.
-NB2_MODEL: str = os.environ.get("NB2_MODEL", "imagen-3.0-fast-generate-001")
+NB2_MODEL: str = os.environ.get("NB2_MODEL", "imagen-4.0-fast-generate-001")
 
 # Nano Banana Pro — high fidelity; used only for the selected prop's final assets.
-NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "imagen-3.0-generate-002")
+NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "imagen-4.0-generate-001")
 
 # ---------------------------------------------------------------------------
 # Image resolution settings

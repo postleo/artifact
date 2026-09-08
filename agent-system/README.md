@@ -75,8 +75,8 @@ This script will guide you through entering the prop's brief, generating draft c
 | `GOOGLE_API_KEY` | Yes (prod) | Google Gen AI SDK key (from Secret Manager) |
 | `GEMINI_FAST_MODEL` | No | Fast reasoning model ID (default: `gemini-2.0-flash`) |
 | `GEMINI_PRO_MODEL` | No | Strong reasoning model ID (default: `gemini-2.5-pro`) |
-| `NB2_MODEL` | No | Nano Banana 2 model ID (default: `gemini-3.1-flash-image`) |
-| `NBPRO_MODEL` | No | Nano Banana Pro model ID (default: `gemini-3-pro-image`) |
+| `NB2_MODEL` | No | Nano Banana 2 Imagen model ID (default: `imagen-4.0-fast-generate-001`) |
+| `NBPRO_MODEL` | No | Nano Banana Pro Imagen model ID (default: `imagen-4.0-generate-001`) |
 | `DEFAULT_BUDGET_CEILING_USD` | No | Per-prop budget ceiling in USD (default: `5.0`) |
 | `OPTIONS_REVIEW_SLA_HOURS` | No | SLA before overdue-review alert (default: `48`) |
 | `SELECTION_SLA_HOURS` | No | SLA before overdue-finalize alert (default: `24`) |
@@ -215,13 +215,15 @@ budget_exceeded (resume after approval)
 
 ---
 
-## Model IDs (confirmed GA, June 2025)
+## Model IDs
 
 | Role | Model ID | Notes |
 |------|----------|-------|
 | Fast reasoning | `gemini-2.0-flash` | Orchestration, parsing, brief writing |
 | Strong reasoning | `gemini-2.5-pro` | Hard reasoning only, escalated selectively |
-| Concept draft images (Nano Banana 2) | `gemini-3.1-flash-image` | Fast, rapid draft concept options |
-| Final hero images (Nano Banana Pro) | `gemini-3-pro-image` | High-fidelity final assets |
+| Concept draft images (Nano Banana 2) | `imagen-4.0-fast-generate-001` | Imagen fast tier — rapid draft concept options (`generate_images`) |
+| Final hero images (Nano Banana Pro) | `imagen-4.0-generate-001` | Imagen quality tier — high-fidelity final assets (`generate_images`) |
 
 All IDs default-coded in `config.py` and overridable via environment variables.
+The image models are **Imagen** models invoked via `client.models.generate_images`;
+they are not interchangeable with Gemini image models (which use `generate_content`).

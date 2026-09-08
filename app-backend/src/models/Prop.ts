@@ -16,17 +16,17 @@ export interface PropAttributes {
 }
 
 export class Prop extends Model<PropAttributes> implements PropAttributes {
-  public id!: string;
-  public name!: string;
-  public description!: string;
-  public status!: string;
-  public brief!: any;
-  public options!: any;
-  public selection!: any;
-  public final_assets!: any;
-  public cost!: any;
-  public flags!: any;
-  public job_id!: string | null;
+  declare id: string;
+  declare name: string;
+  declare description: string;
+  declare status: string;
+  declare brief: any;
+  declare options: any;
+  declare selection: any;
+  declare final_assets: any;
+  declare cost: any;
+  declare flags: any;
+  declare job_id: string | null;
 }
 
 Prop.init(

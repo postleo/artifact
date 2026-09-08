@@ -10,11 +10,11 @@ export interface ProfileAttributes {
 }
 
 export class Profile extends Model<ProfileAttributes> implements ProfileAttributes {
-  public id!: number;
-  public projectName!: string;
-  public worldLore!: string;
-  public departmentRole!: string;
-  public leadName!: string;
+  declare id: number;
+  declare projectName: string;
+  declare worldLore: string;
+  declare departmentRole: string;
+  declare leadName: string;
 }
 
 Profile.init(

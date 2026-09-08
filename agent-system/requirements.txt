@@ -9,4 +9,3 @@ google-cloud-vision==3.7.2
 google-auth>=2.29.0
 pytest==8.2.0
 pytest-asyncio==0.23.6
-google-adk==2.8.0

@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import http from 'http';
+import https from 'https';
+import { URL } from 'url';
 import { initDatabase } from './db.js';
 import { Profile } from './models/Profile.js';
 import { Prop } from './models/Prop.js';
@@ -13,8 +15,22 @@ const PORT = process.env.PORT || 5000;
 const AGENT_SYSTEM_URL = process.env.AGENT_SYSTEM_API_URL || 'http://localhost:8080/v1';
 const AGENT_SYSTEM_TOKEN = process.env.AGENT_SYSTEM_BEARER_TOKEN || '';
 
-app.use(cors());
+// CORS: restrict to the frontend origin(s). Configure via APP_CORS_ORIGIN
+// (comma-separated) — defaults to the local Vite dev server. Use "*" only in dev.
+const CORS_ORIGIN = process.env.APP_CORS_ORIGIN || 'http://localhost:3000';
+const corsOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((o) => o.trim());
+app.use(cors({ origin: corsOrigins }));
 app.use(express.json());
+
+// Optional bearer auth for this backend's API. Enabled only when APP_API_TOKEN is
+// set (leave unset in local dev). Guards the money-spending proxy routes.
+const APP_API_TOKEN = process.env.APP_API_TOKEN || '';
+app.use('/api', (req, res, next) => {
+  if (!APP_API_TOKEN) return next(); // auth disabled in dev
+  const auth = req.header('authorization') || '';
+  if (auth === `Bearer ${APP_API_TOKEN}`) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+});
 
 // Helper for agent authorization headers
 function getAgentHeaders() {
@@ -258,7 +274,11 @@ app.get('/api/props/:id/events', (req, res) => {
     headers: getAgentHeaders(),
   };
 
-  const agentReq = http.get(`${AGENT_SYSTEM_URL}/props/${id}/events`, options, (agentRes) => {
+  // Choose http vs https based on the agent system URL protocol (Cloud Run is https).
+  const agentEventsUrl = `${AGENT_SYSTEM_URL}/props/${id}/events`;
+  const transport = new URL(AGENT_SYSTEM_URL).protocol === 'https:' ? https : http;
+
+  const agentReq = transport.get(agentEventsUrl, options, (agentRes) => {
     agentRes.on('data', async (chunk) => {
       const message = chunk.toString();
       // Write chunk back to the React app frontend client
@@ -322,23 +342,29 @@ async function syncPropWithAgent(propId: string) {
 
     const localProp = await Prop.findByPk(propId);
     if (localProp) {
-      // Map statuses correctly to what the app expects
-      let appStatus = 'generating';
-      if (agentProp.status === 'awaiting_options_review') {
-        appStatus = 'awaiting_review';
-      } else if (agentProp.status === 'assets_ready') {
-        appStatus = 'assets_ready';
-      } else if (agentProp.status === 'exported') {
-        appStatus = 'exported';
-      }
+      // Map every agent status to what the app expects (no silent fallthrough).
+      const STATUS_MAP: Record<string, string> = {
+        draft: 'generating',
+        generating_options: 'generating',
+        awaiting_options_review: 'awaiting_review',
+        selection_confirmed: 'generating',
+        generating_final: 'generating',
+        assets_ready: 'assets_ready',
+        exported: 'exported',
+        failed_options: 'failed',
+        failed_final: 'failed',
+        failed_export: 'failed',
+        budget_exceeded: 'budget_exceeded',
+      };
+      const appStatus = STATUS_MAP[agentProp.status] ?? 'generating';
 
       // Map options
-      const mappedOptions = agentProp.options.map((opt: any) => ({
+      const mappedOptions = (agentProp.options || []).map((opt: any) => ({
         id: opt.id,
         code: `ARF-${propId.replace('prop_', '')}-${opt.id.toUpperCase()}`,
         title: opt.rationale.split(';')[0] || 'Concept option',
         rationale: opt.rationale,
-        imageUrl: opt.image_urls[0] || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800',
+        imageUrl: (opt.image_urls && opt.image_urls[0]) || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800',
         silhouette: 'Bold silhouette framing',
         highlights: [opt.rationale, 'High detail close-up'],
       }));
@@ -392,11 +418,61 @@ async function syncPropWithAgent(propId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Script Analysis (server-side heuristic extraction for onboarding)
+// ---------------------------------------------------------------------------
+
+function analyzeScript(scriptText: string) {
+  const text = (scriptText || '').trim();
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // Slugline: first INT./EXT. heading if present.
+  const slug = lines.find((l) => /^(INT|EXT|INT\.\/EXT|I\/E)[.\s]/i.test(l)) || '';
+  const titleLine = lines[0] || 'Screenplay Scene Extract';
+
+  const lower = text.toLowerCase();
+  const constraintsHits: string[] = [];
+  if (/water|submerg|rain|ocean|sea/.test(lower)) constraintsHits.push('water exposure');
+  if (/fire|pyro|flame|burn/.test(lower)) constraintsHits.push('pyro exposure');
+  if (/stunt|fight|throw|combat|fall/.test(lower)) constraintsHits.push('stunt handling');
+  if (/close[- ]?up|macro|detail/.test(lower)) constraintsHits.push('close-up detail');
+
+  return {
+    title: titleLine.slice(0, 120),
+    sceneHeading: slug || 'EXT. SCENE - DAY',
+    sceneNumber: (text.match(/scene\s+\d+/i) || ['SCENE 01'])[0].toUpperCase(),
+    propName: 'Hero Prop',
+    world: 'Cinematic Production',
+    era: 'Contemporary / Speculative',
+    shortDescription: lines.slice(1, 3).join(' ').slice(0, 240) || 'Key narrative prop extracted from screenplay.',
+    functionOnScreen: 'Hero object used by character.',
+    constraints: constraintsHits.length ? constraintsHits.join(', ') : 'Standard camera handling.',
+    suggestedMaterials: ['Machined Alloy', 'Optical Glass'],
+  };
+}
+
+app.post('/api/analyze-script', (req, res) => {
+  try {
+    const { script_text } = req.body ?? {};
+    if (typeof script_text !== 'string' || !script_text.trim()) {
+      return res.status(400).json({ error: 'script_text (non-empty string) is required' });
+    }
+    return res.json({ extraction: analyzeScript(script_text), engine: 'artifact_backend_parser' });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 3. Start Server
 // ---------------------------------------------------------------------------
 
 async function startServer() {
-  await initDatabase();
+  try {
+    await initDatabase();
+  } catch (err) {
+    console.error('[Startup] Database initialization failed; exiting.', err);
+    process.exit(1);
+  }
   app.listen(PORT, () => {
     console.log(`============================================================`);
     console.log(`  🚀 STANDALONE APP BACKEND SERVING AT http://localhost:${PORT}`);

@@ -64,7 +64,7 @@ class GCSImageJobRunner(ImageJobRunner):
         prop_id: str,
         job_id: str,
         options: list[Any],
-    ) -> None:
+    ) -> dict[str, list[str]]:
         """
         For each option, generate one draft image with Nano Banana 2 (low-res).
         Writes image to GCS and updates the prop record with refs.
@@ -189,18 +189,26 @@ class GCSImageJobRunner(ImageJobRunner):
             logger.debug("Cache hit for %s: reusing %s", cache_key, existing)
             return existing
 
-        # Generate the image via the google-genai unified SDK.
+        # Generate the image via the google-genai unified SDK (Imagen models).
         from google.genai import types as genai_types  # type: ignore
+
+        # Per Vertex AI / Imagen docs, a deterministic `seed` is only accepted when
+        # the SynthID watermark is disabled — the two are mutually exclusive. We only
+        # pass a seed (and disable the watermark) when a non-zero seed is requested
+        # (final seed-locked turnarounds); drafts keep the default watermark.
+        config_kwargs: dict = {
+            "number_of_images": 1,
+            "aspect_ratio": "1:1",
+            "output_mime_type": "image/png",
+        }
+        if seed:
+            config_kwargs["seed"] = seed
+            config_kwargs["add_watermark"] = False
 
         result = self._client.models.generate_images(
             model=model_id,
             prompt=prompt,
-            config=genai_types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="1:1",
-                output_mime_type="image/png",
-                seed=seed,
-            ),
+            config=genai_types.GenerateImagesConfig(**config_kwargs),
         )
 
         image_data = result.generated_images[0].image.image_bytes

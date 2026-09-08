@@ -75,8 +75,17 @@ GCS_BUCKET_NAME: str = os.environ.get("GCS_BUCKET_NAME", "artifact-assets")
 SIGNED_URL_EXPIRY_SECONDS: int = int(os.environ.get("SIGNED_URL_EXPIRY_SECONDS", "3600"))
 
 # ---------------------------------------------------------------------------
-# Gemini Enterprise Agent Platform
+# Vertex AI Agent Engine (Agent Builder) — deployment & runtime
 # ---------------------------------------------------------------------------
-AGENT_PLATFORM_ENDPOINT: str = os.environ.get(
-    "AGENT_PLATFORM_ENDPOINT", "https://dialogflow.googleapis.com"
-)
+# Full resource name of a deployed Agent Engine, e.g.
+#   projects/PROJECT_NUMBER/locations/us-central1/reasoningEngines/1234567890
+# When set (and USE_STUBS is false), the service routes reasoning to the deployed
+# Agent Engine. When empty, it runs the ADK agents in-process (LocalADKAdapter).
+AGENT_ENGINE_RESOURCE_NAME: str = os.environ.get("AGENT_ENGINE_RESOURCE_NAME", "")
+
+# GCS staging bucket used when deploying to Agent Engine (gs://... or bare name).
+VERTEX_STAGING_BUCKET: str = os.environ.get("VERTEX_STAGING_BUCKET", "")
+
+# When "true"/"1", the Gen AI SDK and ADK use Vertex AI (ADC) instead of the
+# Gemini API key. Required for Agent Engine / production GCP deployments.
+GOOGLE_GENAI_USE_VERTEXAI: str = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "")

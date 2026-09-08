@@ -52,7 +52,9 @@ def main() -> int:
         requirements=[
             "google-adk>=1.0.0",
             "google-genai>=2.20.0",
+            "google-cloud-aiplatform>=1.95.0",
             "pydantic>=2.12.0",
+            "cloudpickle>=3.0.0",
         ],
         # Package the local agent code so the deployed runtime can import it.
         extra_packages=["agent", "config.py"],

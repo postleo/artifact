@@ -63,8 +63,10 @@ class SelectionRecorderAgent:
             from google.adk.runners import InMemoryRunner
             from google.genai import types
 
+            from config import GEMINI_FAST_MODEL
+
             adk_agent = Agent(
-                model="gemini-2.0-flash",
+                model=GEMINI_FAST_MODEL,
                 name="selection_recorder_agent",
                 instruction="You are a data validation and audit logging assistant. Record and validate the selected option and rationale.",
             )

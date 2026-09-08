@@ -73,7 +73,7 @@ This script will guide you through entering the prop's brief, generating draft c
 | `GCP_REGION` | No | GCP region (default: `us-central1`) |
 | `GCS_BUCKET_NAME` | Yes (prod) | Cloud Storage bucket for generated images |
 | `GOOGLE_API_KEY` | Yes (prod) | Google Gen AI SDK key (from Secret Manager) |
-| `GEMINI_FAST_MODEL` | No | Fast reasoning model ID (default: `gemini-2.0-flash`) |
+| `GEMINI_FAST_MODEL` | No | Fast reasoning model ID (default: `gemini-2.5-flash`) |
 | `GEMINI_PRO_MODEL` | No | Strong reasoning model ID (default: `gemini-2.5-pro`) |
 | `NB2_MODEL` | No | Nano Banana 2 = Gemini 3.1 Flash Image (default: `gemini-3.1-flash-image`) |
 | `NBPRO_MODEL` | No | Nano Banana Pro = Gemini 3 Pro Image (default: `gemini-3-pro-image`) |
@@ -254,7 +254,7 @@ budget_exceeded (resume after approval)
 
 | Role | Model ID | Notes |
 |------|----------|-------|
-| Fast reasoning | `gemini-2.0-flash` | Orchestration, parsing, brief writing |
+| Fast reasoning | `gemini-2.5-flash` | Orchestration, parsing, brief writing |
 | Strong reasoning | `gemini-2.5-pro` | Hard reasoning only, escalated selectively |
 | Concept draft images (Nano Banana 2) | `gemini-3.1-flash-image` | Gemini 3.1 Flash Image — fast draft concept options (minor jobs) |
 | Final hero images (Nano Banana Pro) | `gemini-3-pro-image` | Gemini 3 Pro Image — high-fidelity final assets (main jobs) |

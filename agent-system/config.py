@@ -12,8 +12,8 @@ import os
 # Gemini reasoning models (GA, confirmed June 2025)
 # ---------------------------------------------------------------------------
 # Fast tier: routine steps — parsing, brief writing, spec text, orchestration.
-# gemini-2.0-flash is the current stable fast-tier GA model.
-GEMINI_FAST_MODEL: str = os.environ.get("GEMINI_FAST_MODEL", "gemini-2.0-flash")
+# gemini-2.5-flash is a broadly-available stable fast-tier GA model.
+GEMINI_FAST_MODEL: str = os.environ.get("GEMINI_FAST_MODEL", "gemini-2.5-flash")
 
 # Pro/strong tier: escalate only for genuinely hard reasoning.
 # gemini-2.5-pro is the current stable high-capability GA model.

@@ -55,6 +55,16 @@ _ROLE_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+def _extract_risk(text: str) -> str:
+    """Map free-text model output to a trademark risk level (fail toward higher risk)."""
+    low = (text or "").lower()
+    if "high" in low:
+        return "high"
+    if "low" in low:
+        return "low"
+    return "none"
+
+
 def _parse_json_object(text: str) -> dict[str, Any]:
     """Best-effort extraction of the first JSON object from model text."""
     if not text:
@@ -117,7 +127,7 @@ class LocalADKAdapter(AgentPlatformAdapter):
 
         data = _parse_json_object(text)
         if role == "trademark_screen" and "trademark_risk" not in data:
-            data = {"trademark_risk": "none"}  # safe default if parsing failed
+            data = {"trademark_risk": _extract_risk(text)}  # parse plain-text risk
         return data
 
 
@@ -176,7 +186,7 @@ class AgentEngineAdapter(AgentPlatformAdapter):
         text = await asyncio.to_thread(_run_query)
         data = _parse_json_object(text)
         if role == "trademark_screen" and "trademark_risk" not in data:
-            data = {"trademark_risk": "none"}
+            data = {"trademark_risk": _extract_risk(text)}
         return data
 
 

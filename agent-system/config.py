@@ -2,9 +2,9 @@
 config.py — single source of truth for all model IDs, budgets, and SLAs.
 Swap model names here without touching any other file.
 
-Model IDs confirmed against official Google documentation (2025):
-  Gemini text  — https://ai.google.dev/gemini-api/docs/models
-  Imagen image — https://cloud.google.com/vertex-ai/generative-ai/docs/image/generate-images
+Model IDs confirmed against official Google documentation:
+  Gemini text        — https://ai.google.dev/gemini-api/docs/models
+  Nano Banana (image) — https://ai.google.dev/gemini-api/docs/image-generation
 """
 import os
 
@@ -20,18 +20,18 @@ GEMINI_FAST_MODEL: str = os.environ.get("GEMINI_FAST_MODEL", "gemini-2.0-flash")
 GEMINI_PRO_MODEL: str = os.environ.get("GEMINI_PRO_MODEL", "gemini-2.5-pro")
 
 # ---------------------------------------------------------------------------
-# Image generation models (Imagen, via the google-genai `generate_images` API)
-# "Nano Banana 2"  → fast, cheap concept drafts (Imagen Fast).
-# "Nano Banana Pro" → high-fidelity final hero assets (Imagen high quality).
-# NOTE: These are Imagen model IDs and are invoked with client.models.generate_images.
-#       Do NOT set these to Gemini image models (e.g. gemini-*-image); those use the
-#       generate_content API instead and are not compatible with this code path.
+# Image generation models (Nano Banana — Gemini image models, via the
+# google-genai `generate_content` API with response_modalities=["IMAGE"]).
+#   "Nano Banana 2"   → Gemini 3.1 Flash Image  (fast, minor/draft jobs)
+#   "Nano Banana Pro" → Gemini 3 Pro Image      (high fidelity, main/final jobs)
+# NOTE: These are Gemini image models invoked with client.models.generate_content.
+#       They are NOT Imagen models and must not be called via generate_images.
 # ---------------------------------------------------------------------------
-# Nano Banana 2 — fast, low-cost; used for concept-option drafts.
-NB2_MODEL: str = os.environ.get("NB2_MODEL", "imagen-4.0-fast-generate-001")
+# Nano Banana 2 — fast, low-cost; used for concept-option drafts (minor jobs).
+NB2_MODEL: str = os.environ.get("NB2_MODEL", "gemini-3.1-flash-image")
 
 # Nano Banana Pro — high fidelity; used only for the selected prop's final assets.
-NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "imagen-4.0-generate-001")
+NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "gemini-3-pro-image")
 
 # ---------------------------------------------------------------------------
 # Image resolution settings

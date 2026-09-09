@@ -10,7 +10,6 @@ of a **"hero prop"** (the signature object the camera studies in close-up — a 
 ancient device, a key): from **screenplay text → structured brief → divergent AI concept designs →
 human review gates → seed-locked turnaround sheets + build/CMF specs** for the fabrication floor.
 
-> Not an academic/fine-art tool — it's purpose-built for on-set/production art departments.
 
 ---
 
@@ -47,9 +46,7 @@ Three decoupled components communicate over REST:
 
 ## Setup — two equally-supported paths
 
-Both paths take a newcomer from zero to running. Path A needs no cloud account.
-
-### Path A — Run locally (no Google Cloud account required)
+### Path A — Run locally 
 
 **Prerequisites:** Node.js 18+, Python 3.10+, and (for the backend's database) the Firestore
 emulator via the Google Cloud CLI (`gcloud`) with Java, **or** just point the backend at a real
@@ -92,7 +89,7 @@ npm run dev            # http://localhost:3000
 ```
 
 Open **http://localhost:3000**. With auth disabled (dev), you go straight in; the agent runs stubbed
-so the full flow works without spending anything.
+so the full flow.
 
 ### Path B — Deploy to Google Cloud (zero → live)
 
@@ -169,7 +166,7 @@ feature-flagged: a durable **Confluent Cloud** topic (`artifact.prop.events`) an
 
 ## Foundation development
 
-The agent system's initial foundation build was performed by **Bob, an IBM AI software-engineering
+The agent system's initial foundation build was performed by **Bob; IBM AI software-engineering
 agent** (spec ingestion, workspace layout, first end-to-end build of `agent-system/`). That
 foundation is built on **Google ADK** and deployed to **Google Cloud Vertex AI Agent Engine**.
 
@@ -180,5 +177,3 @@ foundation is built on **Google ADK** and deployed to **Google Cloud Vertex AI A
 - **Backend** — [app-backend/README.md](/app-backend/README.md)
 - **Agent system** — [agent-system/README.md](/agent-system/README.md)
 
-**Auth:** the deployed app is password-gated; the backend issues a short-lived JWT. In local dev,
-leaving `APP_ACCESS_PASSWORD`/`APP_JWT_SECRET` unset disables auth entirely.

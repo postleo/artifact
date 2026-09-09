@@ -3,10 +3,15 @@ uvicorn[standard]>=0.34.0
 pydantic>=2.12.0
 httpx>=0.27.0
 google-genai>=2.20.0
+google-adk>=1.0.0
+google-cloud-aiplatform>=1.95.0
 google-cloud-firestore==2.16.0
 google-cloud-storage==2.16.0
 google-cloud-vision==3.7.2
 google-auth>=2.29.0
 pytest==8.2.0
 pytest-asyncio==0.23.6
-google-adk==2.8.0
+
+# Confluent/Kafka prop-event backbone. Only required at runtime when
+# KAFKA_ENABLED=true; the producer imports it lazily inside the enable path.
+confluent-kafka==2.5.3

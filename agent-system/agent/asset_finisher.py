@@ -97,7 +97,10 @@ class AssetFinisherAgent:
                 ),
                 output_schema=AssetFinisherResponseSchema,
             )
-            runner = InMemoryRunner(agent=adk_agent)
+            runner = InMemoryRunner(agent=adk_agent, app_name="artifact")
+            await runner.session_service.create_session(
+                app_name="artifact", user_id="default_user", session_id=prop.id
+            )
             prompt = (
                 f"Write material_spec and build_spec based on:\n"
                 f"Prop Brief What: {brief.what}\n"

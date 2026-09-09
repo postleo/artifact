@@ -1,10 +1,17 @@
 import express from 'express';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import http from 'http';
+import https from 'https';
+import { URL } from 'url';
 import { initDatabase } from './db.js';
 import { Profile } from './models/Profile.js';
 import { Prop } from './models/Prop.js';
+import { StudioState } from './models/StudioState.js';
+import * as sseHub from './events/sseHub.js';
+import { startPropEventConsumer, stopPropEventConsumer } from './events/kafkaConsumer.js';
 
 dotenv.config();
 
@@ -13,8 +20,56 @@ const PORT = process.env.PORT || 5000;
 const AGENT_SYSTEM_URL = process.env.AGENT_SYSTEM_API_URL || 'http://localhost:8080/v1';
 const AGENT_SYSTEM_TOKEN = process.env.AGENT_SYSTEM_BEARER_TOKEN || '';
 
-app.use(cors());
+// CORS: restrict to the frontend origin(s). Configure via APP_CORS_ORIGIN
+// (comma-separated) — defaults to the local Vite dev server. Use "*" only in dev.
+const CORS_ORIGIN = process.env.APP_CORS_ORIGIN || 'http://localhost:3000';
+const corsOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((o) => o.trim());
+app.use(cors({ origin: corsOrigins }));
 app.use(express.json());
+
+// ---------------------------------------------------------------------------
+// Authentication: password login -> short-lived signed JWT.
+// The access password and JWT signing secret live ONLY on the backend; nothing
+// secret ships to the browser. Auth is enforced only when both are configured
+// (leave unset in local dev to disable).
+// ---------------------------------------------------------------------------
+const APP_ACCESS_PASSWORD = process.env.APP_ACCESS_PASSWORD || '';
+const APP_JWT_SECRET = process.env.APP_JWT_SECRET || '';
+const AUTH_ENABLED = Boolean(APP_ACCESS_PASSWORD && APP_JWT_SECRET);
+const JWT_TTL_SECONDS = 60 * 60 * 12; // 12 hours
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+// Public: exchange the shared password for a JWT.
+app.post('/api/login', (req, res) => {
+  if (!AUTH_ENABLED) return res.json({ token: 'dev', authDisabled: true });
+  const password = (req.body && req.body.password) as unknown;
+  if (typeof password !== 'string' || !safeEqual(password, APP_ACCESS_PASSWORD)) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  const token = jwt.sign({ role: 'studio' }, APP_JWT_SECRET, { expiresIn: JWT_TTL_SECONDS });
+  return res.json({ token, expiresIn: JWT_TTL_SECONDS });
+});
+
+// Guard every other /api route with a valid Bearer JWT (when auth is enabled).
+app.use('/api', (req, res, next) => {
+  if (!AUTH_ENABLED) return next(); // auth disabled in dev
+  if (req.path === '/login') return next(); // login is public
+  const auth = req.header('authorization') || '';
+  const match = auth.match(/^Bearer (.+)$/);
+  if (!match) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    jwt.verify(match[1], APP_JWT_SECRET);
+    return next();
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+});
 
 // Helper for agent authorization headers
 function getAgentHeaders() {
@@ -258,7 +313,11 @@ app.get('/api/props/:id/events', (req, res) => {
     headers: getAgentHeaders(),
   };
 
-  const agentReq = http.get(`${AGENT_SYSTEM_URL}/props/${id}/events`, options, (agentRes) => {
+  // Choose http vs https based on the agent system URL protocol (Cloud Run is https).
+  const agentEventsUrl = `${AGENT_SYSTEM_URL}/props/${id}/events`;
+  const transport = new URL(AGENT_SYSTEM_URL).protocol === 'https:' ? https : http;
+
+  const agentReq = transport.get(agentEventsUrl, options, (agentRes) => {
     agentRes.on('data', async (chunk) => {
       const message = chunk.toString();
       // Write chunk back to the React app frontend client
@@ -306,6 +365,44 @@ app.get('/api/props/:id/events', (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Live prop lifecycle stream (backed by the Kafka consumer + in-process SSE hub).
+//
+// Unlike `/api/props/:id/events` (which proxies the agent-system's own SSE
+// stream), this endpoint delivers PropEvents that arrive over the Kafka prop
+// event backbone. When KAFKA_ENABLED is false no events flow, but the endpoint
+// still opens a valid (idle) SSE stream so the client contract is unchanged.
+// ---------------------------------------------------------------------------
+app.get('/api/props/:id/live', (req, res) => {
+  const { id } = req.params;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  // Disable proxy buffering (e.g. nginx) so events are delivered immediately.
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Register with the in-process hub; it installs its own disconnect cleanup.
+  sseHub.addClient(id, res);
+
+  // Emit an initial comment so intermediaries flush headers and the client
+  // knows the stream is open.
+  res.write(`: subscribed to prop ${id}\n\n`);
+
+  // Heartbeat to keep intermediaries from closing an idle connection.
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(': ping\n\n');
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseHub.removeClient(id, res);
+    console.log(`[SSE Live] Client disconnected from live stream ${id}`);
+  });
+});
+
 // Helper: Syncs our local App Database with the Agent System's record
 async function syncPropWithAgent(propId: string) {
   try {
@@ -322,23 +419,29 @@ async function syncPropWithAgent(propId: string) {
 
     const localProp = await Prop.findByPk(propId);
     if (localProp) {
-      // Map statuses correctly to what the app expects
-      let appStatus = 'generating';
-      if (agentProp.status === 'awaiting_options_review') {
-        appStatus = 'awaiting_review';
-      } else if (agentProp.status === 'assets_ready') {
-        appStatus = 'assets_ready';
-      } else if (agentProp.status === 'exported') {
-        appStatus = 'exported';
-      }
+      // Map every agent status to what the app expects (no silent fallthrough).
+      const STATUS_MAP: Record<string, string> = {
+        draft: 'generating',
+        generating_options: 'generating',
+        awaiting_options_review: 'awaiting_review',
+        selection_confirmed: 'generating',
+        generating_final: 'generating',
+        assets_ready: 'assets_ready',
+        exported: 'exported',
+        failed_options: 'failed',
+        failed_final: 'failed',
+        failed_export: 'failed',
+        budget_exceeded: 'budget_exceeded',
+      };
+      const appStatus = STATUS_MAP[agentProp.status] ?? 'generating';
 
       // Map options
-      const mappedOptions = agentProp.options.map((opt: any) => ({
+      const mappedOptions = (agentProp.options || []).map((opt: any) => ({
         id: opt.id,
         code: `ARF-${propId.replace('prop_', '')}-${opt.id.toUpperCase()}`,
         title: opt.rationale.split(';')[0] || 'Concept option',
         rationale: opt.rationale,
-        imageUrl: opt.image_urls[0] || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800',
+        imageUrl: (opt.image_urls && opt.image_urls[0]) || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800',
         silhouette: 'Bold silhouette framing',
         highlights: [opt.rationale, 'High detail close-up'],
       }));
@@ -392,17 +495,139 @@ async function syncPropWithAgent(propId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 2a. Studio state persistence (DB-backed replacement for browser localStorage)
+// ---------------------------------------------------------------------------
+
+// Production profile (single record, stored under key 'profile').
+app.get('/api/studio/profile', async (_req, res) => {
+  try {
+    const row = await StudioState.findByPk('profile');
+    return res.json(row ? row.value : null);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/studio/profile', async (req, res) => {
+  try {
+    await StudioState.upsert({ key: 'profile', value: req.body ?? {} });
+    return res.json({ ok: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// The props slate (array), stored under key 'props'.
+app.get('/api/studio/props', async (_req, res) => {
+  try {
+    const row = await StudioState.findByPk('props');
+    return res.json(row ? row.value : []);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/studio/props', async (req, res) => {
+  try {
+    const list = Array.isArray(req.body) ? req.body : [];
+    await StudioState.upsert({ key: 'props', value: list });
+    return res.json({ ok: true, count: list.length });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 2b. Script Analysis (server-side heuristic extraction for onboarding)
+// ---------------------------------------------------------------------------
+
+function analyzeScript(scriptText: string) {
+  const text = (scriptText || '').trim();
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // Slugline: first INT./EXT. heading if present.
+  const slug = lines.find((l) => /^(INT|EXT|INT\.\/EXT|I\/E)[.\s]/i.test(l)) || '';
+  const titleLine = lines[0] || 'Screenplay Scene Extract';
+
+  const lower = text.toLowerCase();
+  const constraintsHits: string[] = [];
+  if (/water|submerg|rain|ocean|sea/.test(lower)) constraintsHits.push('water exposure');
+  if (/fire|pyro|flame|burn/.test(lower)) constraintsHits.push('pyro exposure');
+  if (/stunt|fight|throw|combat|fall/.test(lower)) constraintsHits.push('stunt handling');
+  if (/close[- ]?up|macro|detail/.test(lower)) constraintsHits.push('close-up detail');
+
+  return {
+    title: titleLine.slice(0, 120),
+    sceneHeading: slug || 'EXT. SCENE - DAY',
+    sceneNumber: (text.match(/scene\s+\d+/i) || ['SCENE 01'])[0].toUpperCase(),
+    propName: 'Hero Prop',
+    world: 'Cinematic Production',
+    era: 'Contemporary / Speculative',
+    shortDescription: lines.slice(1, 3).join(' ').slice(0, 240) || 'Key narrative prop extracted from screenplay.',
+    functionOnScreen: 'Hero object used by character.',
+    constraints: constraintsHits.length ? constraintsHits.join(', ') : 'Standard camera handling.',
+    suggestedMaterials: ['Machined Alloy', 'Optical Glass'],
+  };
+}
+
+app.post('/api/analyze-script', (req, res) => {
+  try {
+    const { script_text } = req.body ?? {};
+    if (typeof script_text !== 'string' || !script_text.trim()) {
+      return res.status(400).json({ error: 'script_text (non-empty string) is required' });
+    }
+    return res.json({ extraction: analyzeScript(script_text), engine: 'artifact_backend_parser' });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 3. Start Server
 // ---------------------------------------------------------------------------
 
 async function startServer() {
-  await initDatabase();
-  app.listen(PORT, () => {
+  try {
+    await initDatabase();
+  } catch (err) {
+    console.error('[Startup] Database initialization failed; exiting.', err);
+    process.exit(1);
+  }
+
+  // Start the Kafka prop-event consumer only when the feature flag is on.
+  // startPropEventConsumer() is itself a no-op when KAFKA_ENABLED !== 'true',
+  // and never throws — so an unavailable broker cannot block server startup.
+  const KAFKA_ENABLED = String(process.env.KAFKA_ENABLED || '').toLowerCase() === 'true';
+  if (KAFKA_ENABLED) {
+    console.log('[Startup] KAFKA_ENABLED=true — starting prop event consumer.');
+    void startPropEventConsumer();
+  }
+
+  const server = app.listen(PORT, () => {
     console.log(`============================================================`);
     console.log(`  🚀 STANDALONE APP BACKEND SERVING AT http://localhost:${PORT}`);
     console.log(`  🔗 connected TO AGENT SYSTEM AT ${AGENT_SYSTEM_URL}`);
+    console.log(`  📨 KAFKA PROP EVENT BACKBONE: ${KAFKA_ENABLED ? 'ENABLED' : 'disabled'}`);
     console.log(`============================================================`);
   });
+
+  // Graceful shutdown: stop accepting connections, then disconnect the consumer
+  // so the Kafka consumer group rebalances promptly.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Shutdown] Received ${signal}; shutting down gracefully...`);
+    server.close(() => console.log('[Shutdown] HTTP server closed.'));
+    stopPropEventConsumer()
+      .catch((err) => console.error('[Shutdown] Error stopping consumer:', err))
+      .finally(() => {
+        // Give in-flight work a brief window, then exit.
+        setTimeout(() => process.exit(0), 500);
+      });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();

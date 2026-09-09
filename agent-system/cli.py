@@ -41,7 +41,7 @@ async def run_interactive_cli():
     if use_stubs:
         print("[!] Using local stubs (In-memory DB, canned agent rationales, mocked image outputs).")
     else:
-        print("[*] Running with production adapters (google-adk Gemini and Imagen models).")
+        print("[*] Running with production adapters (Gemini reasoning + Nano Banana image models).")
     print("-" * 80)
 
     # 1. Initialize services

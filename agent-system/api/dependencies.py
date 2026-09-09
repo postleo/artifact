@@ -11,7 +11,12 @@ from typing import Any
 from agent.asset_finisher import AssetFinisherAgent
 from agent.options_generator import OptionsGeneratorAgent
 from agent.orchestrator import Orchestrator
-from agent.platform_adapter import AgentPlatformAdapter, GeminiAgentPlatformAdapter, StubAgentPlatformAdapter
+from agent.platform_adapter import (
+    AgentEngineAdapter,
+    AgentPlatformAdapter,
+    LocalADKAdapter,
+    StubAgentPlatformAdapter,
+)
 from agent.safety_service import GeminiSafetyService, SafetyService, StubSafetyService
 from agent.selection_recorder import SelectionRecorderAgent
 from gen.cost_service import CostService
@@ -36,7 +41,13 @@ def get_repo() -> PropRepository:
 def get_platform_adapter() -> AgentPlatformAdapter:
     if _is_stub_mode():
         return StubAgentPlatformAdapter()
-    return GeminiAgentPlatformAdapter()
+    # Prefer a deployed Vertex AI Agent Engine when configured; otherwise run the
+    # ADK agents in-process.
+    from config import AGENT_ENGINE_RESOURCE_NAME
+
+    if AGENT_ENGINE_RESOURCE_NAME:
+        return AgentEngineAdapter()
+    return LocalADKAdapter()
 
 
 @lru_cache(maxsize=1)

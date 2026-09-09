@@ -72,7 +72,11 @@ def get_cost_service() -> CostService:
 
 @lru_cache(maxsize=1)
 def get_dam_adapter() -> DAMAdapter:
-    if _is_stub_mode():
+    # Use the no-op stub in stub mode OR when no DAM/asset-library is configured
+    # (DAM_API_URL unset). This lets export succeed with a stub reference instead of
+    # crashing a deployment that has no external DAM wired up.
+    import os
+    if _is_stub_mode() or not os.environ.get("DAM_API_URL"):
         return StubDAMAdapter()
     return HttpDAMAdapter()
 

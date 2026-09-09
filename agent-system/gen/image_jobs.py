@@ -149,7 +149,9 @@ class GCSImageJobRunner(ImageJobRunner):
             )
             asset_refs["turnaround"].append(ref)
 
-        callout_prompts = ["mechanism detail", "surface markings", "wear and patina"]
+        # Keep the final-asset burst modest to stay within image quota (each call also
+        # retries with backoff on 429). Turnarounds are the essential sheet.
+        callout_prompts = ["mechanism detail", "surface markings"]
         for cp in callout_prompts:
             ref = await self._generate_and_store(
                 model_id=NBPRO_MODEL,
@@ -161,7 +163,7 @@ class GCSImageJobRunner(ImageJobRunner):
             )
             asset_refs["detail_callouts"].append(ref)
 
-        for variant in ["hero", "stunt"]:
+        for variant in ["hero"]:
             ref = await self._generate_and_store(
                 model_id=NBPRO_MODEL,
                 prompt=f"{base_prompt}. Variant: {variant} version.",
@@ -212,11 +214,35 @@ class GCSImageJobRunner(ImageJobRunner):
             **({"seed": seed} if seed else {}),
         )
 
-        result = self._client.models.generate_content(
-            model=model_id,
-            contents=[prompt],
-            config=config,
-        )
+        # Generate with retry + backoff on 429 / RESOURCE_EXHAUSTED. Final-asset jobs
+        # fire several image calls in sequence, and image models can have a low
+        # per-minute quota — so we back off and retry rather than fail the whole stage.
+        import asyncio
+
+        result = None
+        last_err: Exception | None = None
+        for attempt in range(6):
+            try:
+                result = self._client.models.generate_content(
+                    model=model_id,
+                    contents=[prompt],
+                    config=config,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    wait = min(60, 8 * (2 ** attempt))
+                    logger.warning(
+                        "Image quota 429 for %s (attempt %d/6) — backing off %ss",
+                        label, attempt + 1, wait,
+                    )
+                    last_err = exc
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+        if result is None:
+            raise RuntimeError(f"Image generation exhausted retries for {label!r}: {last_err}")
 
         # Extract the first inline image part from the response.
         image_data = None

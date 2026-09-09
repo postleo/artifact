@@ -9,6 +9,7 @@ import { SelectionPage } from './components/pages/SelectionPage';
 import { DossierPage } from './components/pages/DossierPage';
 import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
+import { GenerationStatus } from './components/GenerationStatus';
 import { getPropArtwork } from './utils/propVisuals';
 import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp } from './services/studioApi';
 import { isAuthenticated } from './services/auth';
@@ -366,6 +367,11 @@ export default function App() {
       }
     };
 
+    if (liveCreated) {
+      // Don't show demo concept art while the real pipeline runs — the poller fills
+      // in the real options + images, and GenerationStatus communicates progress.
+      newProp.options = [];
+    }
     const updated = [newProp, ...propsList];
     setPropsList(updated);
     void saveStudioProps(updated);
@@ -512,6 +518,7 @@ export default function App() {
 
       {/* Main Content View Container */}
       <main className="flex-1 pb-16">
+        <GenerationStatus prop={activeProp} />
         {currentTab === 'catalogue' && (
           <CataloguePage
             propsList={propsList}

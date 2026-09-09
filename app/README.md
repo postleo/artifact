@@ -36,9 +36,13 @@ Copy the default environment template into an active local `.env` configuration 
 cp .env.example .env.local
 ```
 
-Open `.env.local` in your editor and configure the endpoints:
-- `VITE_APP_API_URL=http://localhost:5000` (This points to your Express `app-backend` API).
-*Note: If no API backend is connected, the app will run in a demonstration-only mode using mock local browser state.*
+Open `.env.local` in your editor and configure the backend endpoint:
+- `VITE_BACKEND_URL=http://localhost:5000/api` (points at your Express `app-backend`; baked into the
+  bundle at build time — for Cloud Run it's set via the Cloud Build `_VITE_BACKEND_URL` arg).
+
+*Note: when the backend is reachable, the brief → **Synthesize Concepts** flow creates a real prop
+via the agent pipeline and polls for the generated images. The deployed app is **password-gated**
+(login screen → JWT); in local dev with the backend's auth disabled you go straight in.*
 
 ---
 

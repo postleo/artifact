@@ -4,108 +4,181 @@
 
 # Artifact: Art Department Hero Prop Pipeline
 
-Welcome to **Artifact**! 
+**Artifact** is a production tool for the **art departments of film, television, and game cinematics
+crews** — Production Designers, Prop Masters, and Fabricators. It structures the creative lifecycle
+of a **"hero prop"** (the signature object the camera studies in close-up — a relic, a map, an
+ancient device, a key): from **screenplay text → structured brief → divergent AI concept designs →
+human review gates → seed-locked turnaround sheets + build/CMF specs** for the fabrication floor.
 
-Artifact is a specialized production tool designed for **film, television, and game cinematics film crews** (specifically Production Designers, Prop Masters, and Fabricators). 
-
-It automates and structures the creative lifecycle of a **"hero prop"**—the signature, highly detailed physical object that the story depends on and the camera studies in close-ups (like a relic, a map, an ancient device, or a key). Artifact guides your prop brief from screenplay text to divergent concept designs, through human review gates, and compiles complete build specifications and turnaround sheets for the fabrication shop floor.
+> Not an academic/fine-art tool — it's purpose-built for on-set/production art departments.
 
 ---
 
-## 📁 Repository Architecture
+## How it works
 
-This repository is structured as a clean, decoupled monorepo containing three completely standalone components:
+```mermaid
+flowchart LR
+  A[Screenplay / Brief] --> B[Brief extraction]
+  B --> C[Divergent concept options<br/>Gemini Nano Banana images]
+  C --> D[Human review gate]
+  D --> E[Finalize: turnarounds + build spec]
+  E --> F[Fabrication floor / DAM]
+```
+
+Three decoupled components communicate over REST:
 
 ```
 /
-├── app/                  <-- [Component 1] Standalone React / Vite Frontend Dashboard
-├── app-backend/          <-- [Component 2] Standalone Express & SQL Database Backend API
-└── agent-system/         <-- [Component 3] Standalone Python ADK Agent System Core
+├── app/            [Frontend]  React 19 + Vite + TypeScript + Tailwind (login-gated Studio dashboard)
+├── app-backend/    [Backend]   Node + Express + TypeScript (JWT auth, Firestore, agent proxy, SSE, webhook)
+└── agent-system/   [Agent]     Python 3.12 + FastAPI + Google ADK (reasoning core; Vertex AI Agent Engine)
 ```
 
-Each component is 100% independent and communicates over standard REST APIs, allowing them to be developed, run, and deployed separately.
+- **Frontend** collects the brief (paste / upload / manual), then calls the backend to create a prop
+  and polls for the real generated options + images.
+- **Backend** verifies a JWT, proxies to the agent, and mirrors agent state into **Firestore**
+  (sync-on-read), fanning out live updates over SSE.
+- **Agent** runs three Google ADK subagents (`OptionsGenerator`, `SelectionRecorder`,
+  `AssetFinisher`), calls **Gemini** for reasoning and **Nano Banana** image models for concept +
+  hero imagery, and stores images in **GCS** (served via signed URLs). It runs in-process locally or
+  on **Vertex AI Agent Engine** in the cloud — same code, no change.
 
 ---
 
-## 🚀 One-Minute Local Quickstart (Stub / Offline Mode)
+## Setup — two equally-supported paths
 
-You can launch and test the entire full-stack system on your machine **completely offline and without any Google Cloud account or API keys required**, with zero Google Cloud setup required!
+Both paths take a newcomer from zero to running. Path A needs no cloud account.
 
-### Prerequisites
-Make sure you have the following installed on your system:
-1. **Node.js** (v18 or higher) & **npm** (comes with Node)
-2. **Python** (v3.10 or higher) & **pip** (comes with Python)
+### Path A — Run locally (no Google Cloud account required)
 
----
+**Prerequisites:** Node.js 18+, Python 3.10+, and (for the backend's database) the Firestore
+emulator via the Google Cloud CLI (`gcloud`) with Java, **or** just point the backend at a real
+Firestore later. The **agent runs fully offline in stub mode**.
 
-### Step-by-Step Launch
+Open three terminals:
 
-Open **three separate terminal windows** and run the following commands:
-
-#### Terminal 1: Launch the Agent Reasoning Core (Port 8080)
-The Python agent generates design concepts, handles safety validation, and computes build turnarounds.
 ```bash
+# Terminal 1 — Agent (offline stub mode, no GCP needed)
 cd agent-system
-
-# 1. Create a Python virtual environment to keep things clean
-python -m venv .venv
-source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
-
-# 2. Install dependencies
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-# 3. Launch in Offline/Stub mode (no Google Cloud account needed!)
 USE_STUBS=true uvicorn api.app:app --host 0.0.0.0 --port 8080 --reload
+#   API docs: http://localhost:8080/docs   (interactive CLI alternative: USE_STUBS=true python cli.py)
 ```
-*API docs will be available at: `http://localhost:8080/docs`*
 
-#### Terminal 2: Launch the App Backend API (Port 5000)
-The Express server persists production information and prop records in a local database file, and proxies requests to the Python agent.
 ```bash
+# Terminal 2 — Firestore emulator (the backend's local database)
+gcloud emulators firestore start --host-port=localhost:8085
+#   No emulator/Java? Skip this and set the backend to a real Firestore (see Path B, step 3).
+```
+
+```bash
+# Terminal 3 — Backend (Express)
 cd app-backend
-
-# 1. Install dependencies
 npm install
-
-# 2. Copy the default environment configuration
 cp .env.example .env
-
-# 3. Launch the development server
-npm run dev
+#   In .env set:  GCP_PROJECT_ID=demo-artifact   FIRESTORE_EMULATOR_HOST=localhost:8085
+#   Leave APP_ACCESS_PASSWORD / APP_JWT_SECRET UNSET -> auth is disabled for easy local dev.
+npm run dev            # http://localhost:5000
 ```
-*App Backend API will run at: `http://localhost:5000` (it will automatically create a local `db.sqlite` database file).*
 
-#### Terminal 3: Launch the Studio Frontend App (Port 3000)
-The React dashboard is your visual workspace for screenplay onboarding, selection reviews, and downloading specifications.
 ```bash
+# Terminal 4 — Frontend (React/Vite)
 cd app
-
-# 1. Install dependencies
 npm install
-
-# 2. Copy the default environment configuration
 cp .env.example .env.local
-
-# 3. Launch the React server
-npm run dev
+#   In .env.local set:  VITE_BACKEND_URL=http://localhost:5000/api
+npm run dev            # http://localhost:3000
 ```
-*Navigate your browser to: **`http://localhost:3000`***
+
+Open **http://localhost:3000**. With auth disabled (dev), you go straight in; the agent runs stubbed
+so the full flow works without spending anything.
+
+### Path B — Deploy to Google Cloud (zero → live)
+
+**Prerequisites:** a Google Cloud project with billing, and `gcloud` authenticated
+(`gcloud auth login && gcloud config set project YOUR_PROJECT`).
+
+```bash
+export PROJECT=YOUR_PROJECT REGION=us-central1
+
+# 1. Enable the APIs
+gcloud services enable run.googleapis.com aiplatform.googleapis.com firestore.googleapis.com \
+  storage.googleapis.com secretmanager.googleapis.com cloudbuild.googleapis.com
+
+# 2. Create Firestore (Native) + a GCS bucket for generated images
+gcloud firestore databases create --location=$REGION
+gcloud storage buckets create gs://$PROJECT-artifact-assets --location=$REGION
+
+# 3. Create secrets (login password, JWT signing key, agent bearer token)
+printf '%s' "$(openssl rand -hex 12)" | gcloud secrets create artifact-login-password --data-file=-
+printf '%s' "$(openssl rand -hex 48)" | gcloud secrets create artifact-jwt-secret     --data-file=-
+printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create artifact-agent-token    --data-file=-
+
+# 4. Deploy the agent (FastAPI + ADK) — cpu-boost keeps ML imports cold-start-safe
+gcloud run deploy artifact-agent --source agent-system --region $REGION --allow-unauthenticated \
+  --min-instances 0 --cpu-boost --memory 2Gi --cpu 2 --timeout 600 \
+  --set-env-vars USE_STUBS=false,GCP_PROJECT_ID=$PROJECT,GOOGLE_GENAI_USE_VERTEXAI=1,GCS_BUCKET_NAME=$PROJECT-artifact-assets \
+  --set-secrets API_BEARER_TOKEN=artifact-agent-token:latest
+
+# 5. Deploy the backend (Express + Firestore) — point it at the agent
+gcloud run deploy artifact-backend --source app-backend --region $REGION --allow-unauthenticated \
+  --min-instances 0 --set-env-vars NODE_ENV=production,GCP_PROJECT_ID=$PROJECT,AGENT_SYSTEM_API_URL=<AGENT_URL>/v1 \
+  --set-secrets APP_ACCESS_PASSWORD=artifact-login-password:latest,APP_JWT_SECRET=artifact-jwt-secret:latest,AGENT_SYSTEM_BEARER_TOKEN=artifact-agent-token:latest
+
+# 6. Build + deploy the frontend (bake the backend URL at build time)
+gcloud builds submit --config app/cloudbuild.yaml \
+  --substitutions _VITE_BACKEND_URL=<BACKEND_URL>/api,_IMAGE=$REGION-docker.pkg.dev/$PROJECT/cloud-run-source-deploy/artifact-frontend:latest app
+gcloud run deploy artifact-frontend --image <IMAGE> --region $REGION --allow-unauthenticated --min-instances 0
+
+# 7. (Optional) Deploy the ADK reasoning core to Vertex AI Agent Engine, then set
+#    AGENT_ENGINE_RESOURCE_NAME on the agent service (see agent-system/README.md).
+```
+
+Retrieve your login password with
+`gcloud secrets versions access latest --secret=artifact-login-password`.
+Full teardown: `./scripts/teardown.sh --yes`.
 
 ---
 
-## 🛠️ The Three Components Explained
+## How Google Cloud is used
 
-### 🖥️ 1. Studio Onboarding & Dashboard Frontend (`/app/`)
-* **What it is:** The visual control room. It provides an intuitive layout for production designers and film crews to analyze screenplays, review draft concepts in museum "glass showcases" (Vitrine Plates), manage human-in-the-loop review gates, and export full blueprints.
-* **Tech Stack:** React 19, Vite, TypeScript, TailwindCSS, Motion, Lucide.
-* **Go deeper:** See [app/README.md](/app/README.md).
+| Service | Role in Artifact | Code |
+|---|---|---|
+| **Vertex AI Agent Engine** (Agent Builder) | Managed runtime for the ADK reasoning core | [`agent-system/deploy/deploy_agent_engine.py`](/agent-system/deploy/deploy_agent_engine.py), [`agent/platform_adapter.py`](/agent-system/agent/platform_adapter.py) |
+| **Google ADK** | Agent framework — root `LlmAgent` + subagents | [`agent-system/agent/adk/root_agent.py`](/agent-system/agent/adk/root_agent.py), [`agent/adk/core.py`](/agent-system/agent/adk/core.py) |
+| **Gemini via Google Gen AI SDK** | Reasoning (`gemini-2.5-flash`) + Nano Banana image gen | [`agent-system/gen/image_jobs.py`](/agent-system/gen/image_jobs.py), [`config.py`](/agent-system/config.py) |
+| **Cloud Run** | All 3 services, scale-to-zero | [`*/Dockerfile`](/agent-system/Dockerfile) |
+| **Firestore (Native)** | Serverless persistence | [`app-backend/src/db.ts`](/app-backend/src/db.ts), [`store/repository.py`](/agent-system/store/repository.py) |
+| **Cloud Storage** | Generated images (IAM V4 signed URLs) | [`agent-system/api/storage.py`](/agent-system/api/storage.py) |
+| **Secret Manager** | All credentials (never in the bundle) | deploy flags (`--set-secrets`) |
+| **Cloud Build + Artifact Registry** | Container builds | [`app/cloudbuild.yaml`](/app/cloudbuild.yaml) |
 
-### 🗄️ 2. App Backend API & Database (`/app-backend/`)
-* **What it is:** The persistent data manager. It replaces fragile browser `localStorage` by storing your team's production bibles and prop sheets in an SQL database. It also acts as a smart mediator that relays commands to the Python Agent and synchronizes states in real-time via Server-Sent Events (SSE).
-* **Tech Stack:** Node.js, Express, TypeScript, Sequelize (ORM), SQLite (local), PostgreSQL (production).
-* **Go deeper:** See [app-backend/README.md](/app-backend/README.md).
+Image generation uses `generate_content(response_modalities=["IMAGE"])` on Nano Banana
+(`gemini-3.1-flash-image`, `gemini-3-pro-image`) — **not** `generate_images` (they are Gemini image
+models, not Imagen).
 
-### 🤖 Core Agent reasoning Engine (`/agent-system/`)
-* **What it is:** The intelligence core. Built on **Google ADK** (Agent Development Kit) with the **Google Gen AI SDK**, it runs three specialized sub-agents (`OptionsGenerator`, `SelectionRecorder`, `AssetFinisher`) as ADK `LlmAgent`s (via `InMemoryRunner`) using Gemini models to draft design specifications and run trademark checks, and generates seed-locked multi-angle turnaround images with Nano Banana (Gemini image) models. A small local `agent/adk/` layer provides offline-safe ADK-style helpers for tests/CLI. It also includes an independent interactive command-line tool (`cli.py`). Deploys to **Vertex AI Agent Engine** (Agent Builder).
-* **Tech Stack:** Python 3.12, FastAPI, google-adk, google-genai, Firestore (production), Vertex AI Agent Engine.
-* **Go deeper:** See [agent-system/README.md](/agent-system/README.md).
+## How Confluent (Kafka) is used
+
+An **optional** prop-lifecycle event backbone. Every state transition emits an event; delivery is
+feature-flagged: a durable **Confluent Cloud** topic (`artifact.prop.events`) and/or an HTTP
+**webhook push** (default, keeps the backend scale-to-zero).
+- Producer + webhook: [`agent-system/events/producer.py`](/agent-system/events/producer.py), [`events/webhook.py`](/agent-system/events/webhook.py)
+- Backend consumer + shared apply + SSE: [`app-backend/src/events/kafkaConsumer.ts`](/app-backend/src/events/kafkaConsumer.ts), [`propEvents.ts`](/app-backend/src/events/propEvents.ts)
+- One-command cluster lifecycle (with storage caps + free auto-teardown): [`scripts/confluent-cluster.sh`](/scripts/confluent-cluster.sh)
+
+## Foundation development
+
+The agent system's initial foundation build was performed by **Bob, an IBM AI software-engineering
+agent** (spec ingestion, workspace layout, first end-to-end build of `agent-system/`). That
+foundation is built on **Google ADK** and deployed to **Google Cloud Vertex AI Agent Engine**.
+
+---
+
+## The three components
+- **Frontend** — [app/README.md](/app/README.md)
+- **Backend** — [app-backend/README.md](/app-backend/README.md)
+- **Agent system** — [agent-system/README.md](/agent-system/README.md)
+
+**Auth:** the deployed app is password-gated; the backend issues a short-lived JWT. In local dev,
+leaving `APP_ACCESS_PASSWORD`/`APP_JWT_SECRET` unset disables auth entirely.

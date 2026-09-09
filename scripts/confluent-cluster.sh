@@ -49,6 +49,14 @@ AGENT_SVC="artifact-agent"
 SECRET_KEY="confluent-api-key"
 SECRET_SECRET="confluent-api-secret"
 SECRET_BOOTSTRAP="confluent-bootstrap"
+# Auto-down via Cloud Scheduler (FREE: 3 jobs/month per billing account).
+SCHED_JOB="${SCHED_JOB:-artifact-confluent-autodown}"
+SCHED_CRON="${SCHED_CRON:-0 3 * * *}"                 # default: nightly 03:00
+SCHED_TZ="${SCHED_TZ:-Etc/UTC}"
+CONFLUENT_API_BASE="${CONFLUENT_API_BASE:-https://api.confluent.cloud}"
+# Confluent CLOUD-level key (distinct from the cluster key; required to DELETE a cluster).
+CLOUD_KEY_SECRET="confluent-cloud-api-key"
+CLOUD_SECRET_SECRET="confluent-cloud-api-secret"
 
 log() { echo "[confluent-cluster] $*"; }
 die() { echo "[confluent-cluster] ERROR: $*" >&2; exit 1; }
@@ -207,12 +215,50 @@ cmd_status() {
   done
 }
 
+ensure_scheduler() { gcloud services enable cloudscheduler.googleapis.com >/dev/null 2>&1 || true; }
+
+# Wire a FREE Cloud Scheduler job that calls the Confluent Cloud REST API to DELETE the
+# cluster on a schedule (default nightly). No executor/container needed => truly $0 (Cloud
+# Scheduler bills nothing for the first 3 jobs/month per billing account). Deleting the
+# cluster stops all Kafka charges; the services stay KAFKA_ENABLED=true but degrade
+# gracefully (consumer retries + logs; producer no-ops on send error) and re-attach cleanly
+# on the next `up`. Run `disable` too if you want a fully quiet idle state.
+cmd_schedule_down() {
+  ensure_cli; ensure_scheduler
+  local cron="${1:-$SCHED_CRON}"
+  local cid env_id; cid="$(find_cluster_id)"
+  [ -n "$cid" ] || die "No cluster '$CLUSTER_NAME' to schedule. Run 'up' first."
+  env_id="$(current_env_id)"; [ -n "$env_id" ] || die "No Confluent environment id."
+  local ck cs
+  ck="$(gcloud secrets versions access latest --secret="$CLOUD_KEY_SECRET" 2>/dev/null)"
+  cs="$(gcloud secrets versions access latest --secret="$CLOUD_SECRET_SECRET" 2>/dev/null)"
+  [ -n "$ck" ] && [ -n "$cs" ] || die "Store a Confluent CLOUD-level API key first in Secret Manager as '$CLOUD_KEY_SECRET' and '$CLOUD_SECRET_SECRET' (needed to delete the cluster)."
+  local b64; b64="$(printf '%s:%s' "$ck" "$cs" | base64 | tr -d '\n')"
+  local url="${CONFLUENT_API_BASE}/cmk/v2/clusters/${cid}?environment=${env_id}"
+  gcloud scheduler jobs delete "$SCHED_JOB" --location "$REGION" --quiet >/dev/null 2>&1 || true
+  gcloud scheduler jobs create http "$SCHED_JOB" --location "$REGION" \
+    --schedule "$cron" --time-zone "$SCHED_TZ" --uri "$url" --http-method DELETE \
+    --headers "Authorization=Basic ${b64}" \
+    --description "Artifact: auto-delete idle Confluent cluster ${CLUSTER_NAME}" >/dev/null 2>&1 \
+    && log "Scheduled auto-down '${SCHED_JOB}' (cron '${cron}', ${SCHED_TZ}). Cost: \$0 (<=3 free Scheduler jobs/account)." \
+    || die "Failed to create scheduler job."
+  log "SECURITY NOTE: the Confluent cloud key is stored in the job's Authorization header. Use a least-privilege cloud key and rotate it periodically."
+}
+
+cmd_unschedule_down() {
+  ensure_scheduler
+  gcloud scheduler jobs delete "$SCHED_JOB" --location "$REGION" --quiet >/dev/null 2>&1 \
+    && log "Removed scheduler job '${SCHED_JOB}'." || log "No scheduler job '${SCHED_JOB}' found."
+}
+
 case "${1:-}" in
   up)      cmd_up ;;
   down)    shift; cmd_down "${1:-}" ;;
   enable)  cmd_enable ;;
   disable) cmd_disable ;;
   status)  cmd_status ;;
+  schedule-down)   shift; cmd_schedule_down "${1:-}" ;;
+  unschedule-down) cmd_unschedule_down ;;
   *) cat <<EOF
 Artifact Confluent cluster lifecycle.
 
@@ -221,8 +267,13 @@ Commands:
   status             Show cluster/topic state and each service's KAFKA_ENABLED
   enable | disable   Toggle KAFKA_ENABLED on the services (cluster unchanged)
   down --yes         Disable services and DELETE the cluster (stops all charges)
+  schedule-down ["CRON"]   Create a FREE Cloud Scheduler job that auto-deletes the cluster
+                           on a schedule (default "0 3 * * *"). Requires a Confluent CLOUD-level
+                           API key stored in Secret Manager ($CLOUD_KEY_SECRET / $CLOUD_SECRET_SECRET).
+  unschedule-down          Remove the auto-down Cloud Scheduler job
 
 Prereq (one-time): 'confluent login' (or CONFLUENT_CLOUD_API_KEY/SECRET) + gcloud project set.
+Cloud Scheduler cost: \$0 for the first 3 jobs/month per billing account.
 EOF
      exit 1 ;;
 esac

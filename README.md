@@ -4,13 +4,22 @@
 
 # Artifact: Art Department Hero Prop Pipeline
 
-**Artifact** is a production tool for the **art departments of film, television, and game cinematics
-crews** — Production Designers, Prop Masters, and Fabricators. It structures the creative lifecycle
-of a **"hero prop"** (the signature object the camera studies in close-up — a relic, a map, an
-ancient device, a key): from **screenplay text → structured brief → divergent AI concept designs →
-human review gates → seed-locked turnaround sheets + build/CMF specs** for the fabrication floor.
+**Artifact is a production tool with an AI agent system at its center.** It helps the **art
+departments of film, television, and game cinematics crews** (Production Designers, Prop Masters,
+Fabricators) design a **"hero prop"** — the signature object the camera studies in close-up (a relic,
+a map, an ancient device, a key).
 
-> Not an academic/fine-art tool — it's purpose-built for on-set/production art departments.
+**What it does, plainly:** you give it a screenplay moment or a short brief; it extracts a structured
+prop brief, generates several **divergent AI concept designs** with real images, lets a human review
+and approve one, and then compiles **build-ready turnaround sheets and a materials/finish/build
+spec** for the fabrication floor — keeping a human in the loop at each gate.
+
+**How it works:** a React studio app → an Express backend (auth + proxy + Firestore) → a Python
+agent built on **Google ADK** that runs three subagents and calls **Gemini** (reasoning + Nano
+Banana image models) on **Vertex AI Agent Engine**. It runs on a scale-to-zero Google Cloud stack,
+so it idles at ~$0 and costs cents per prop.
+
+> Purpose-built for on-set/production art departments — not an academic/fine-art tool.
 
 ---
 

@@ -1,33 +1,21 @@
-import { DataTypes, Model } from 'sequelize';
-import { sequelize } from '../db.js';
+import { firestore, wrapDoc } from '../db.js';
 
-// Generic key/value store for the studio UI's persisted state (production profile
-// and the props slate), replacing browser localStorage with the backend database.
+// Key/value store for the studio UI's persisted state (production profile + props
+// slate), replacing browser localStorage. Namespaced collection.
+const col = firestore.collection('app_studio_state');
+
 export interface StudioStateAttributes {
-  key: string;
   value: any;
 }
 
-export class StudioState extends Model<StudioStateAttributes> implements StudioStateAttributes {
-  declare key: string;
-  declare value: any;
-}
-
-StudioState.init(
-  {
-    key: {
-      type: DataTypes.STRING,
-      primaryKey: true,
-    },
-    value: {
-      type: DataTypes.JSON,
-      allowNull: false,
-      defaultValue: {},
-    },
-  },
-  {
-    sequelize,
-    modelName: 'StudioState',
-    tableName: 'studio_state',
+export class StudioState {
+  static async findByPk(key: string) {
+    const ref = col.doc(key);
+    const snap = await ref.get();
+    return snap.exists ? wrapDoc(ref, snap.data() as StudioStateAttributes) : null;
   }
-);
+
+  static async upsert(rec: { key: string; value: any }) {
+    await col.doc(rec.key).set({ value: rec.value });
+  }
+}

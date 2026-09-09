@@ -12,6 +12,13 @@ Started: 2026-09-08T14:27:39Z
 | 2026-09-08T14:44:08.180863+00:00 | AgentEngineAdapter.invoke | 3102432036711825408 | trademark_screen | "{'trademark_risk': 'none'}" | - |
 | 2026-09-08T14:45:13.412263+00:00 | AgentEngineAdapter.invoke(hardened) | 3102432036711825408 | plain vs branded | {'trademark_risk': 'none'}/{'trademark_risk': 'high'} | - |
 
+## Firestore migration — end-to-end verified
+
+Migrated app-backend off Cloud SQL to Firestore (Native, serverless, scales to zero).
+Verified live: studio profile + props persist to Firestore; prop `prop_33fe2525`
+("Firestore Migration Test Compass", 2 options) created via backend→agent→Agent
+Engine→Nano Banana and read back from the Firestore `app_props` collection (HTTP 200).
+
 ## Full-stack GCP deployment — end-to-end verified
 
 Deployed services (all Cloud Run, us-central1):

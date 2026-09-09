@@ -14,9 +14,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "jsonwebtoken": "^9.0.2",
-    "sequelize": "^6.37.1",
-    "sqlite3": "^5.1.7",
-    "pg": "^8.11.3"
+    "@google-cloud/firestore": "^7.11.0"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

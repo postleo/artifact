@@ -9,7 +9,7 @@ departments of film, television, and game cinematics crews** (Production Designe
 Fabricators) design a **"hero prop"** — the signature object the camera studies in close-up (a relic,
 a map, an ancient device, a key).
 
-**What it does, plainly:** you give it a screenplay moment or a short brief; it extracts a structured
+**What it does:** you give it a screenplay moment or a short brief; it extracts a structured
 prop brief, generates several **divergent AI concept designs** with real images, lets a human review
 and approve one, and then compiles **build-ready turnaround sheets and a materials/finish/build
 spec** for the fabrication floor — keeping a human in the loop at each gate.
@@ -17,9 +17,8 @@ spec** for the fabrication floor — keeping a human in the loop at each gate.
 **How it works:** a React studio app → an Express backend (auth + proxy + Firestore) → a Python
 agent built on **Google ADK** that runs three subagents and calls **Gemini** (reasoning + Nano
 Banana image models) on **Vertex AI Agent Engine**. It runs on a scale-to-zero Google Cloud stack,
-so it idles at ~$0 and costs cents per prop.
+so it idles at ~$0.
 
-> Purpose-built for on-set/production art departments — not an academic/fine-art tool.
 
 ---
 

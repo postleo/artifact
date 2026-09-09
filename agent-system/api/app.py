@@ -20,9 +20,22 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Artifact Agent System starting up.")
-    yield
-    # Shutdown
-    logger.info("Artifact Agent System shutting down.")
+    # Initialise the shared prop-event producer (no-op unless KAFKA_ENABLED).
+    # Import is local so the events package is only touched at app startup.
+    from events.producer import get_producer
+
+    producer = get_producer()
+    app.state.prop_event_producer = producer
+    logger.info("Prop-event backbone enabled=%s", producer.enabled)
+    try:
+        yield
+    finally:
+        # Shutdown — flush and release the producer gracefully.
+        logger.info("Artifact Agent System shutting down.")
+        try:
+            producer.close()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Error closing prop-event producer: %s", exc, exc_info=True)
 
 
 app = FastAPI(

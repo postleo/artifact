@@ -89,3 +89,38 @@ VERTEX_STAGING_BUCKET: str = os.environ.get("VERTEX_STAGING_BUCKET", "")
 # When "true"/"1", the Gen AI SDK and ADK use Vertex AI (ADC) instead of the
 # Gemini API key. Required for Agent Engine / production GCP deployments.
 GOOGLE_GENAI_USE_VERTEXAI: str = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "")
+
+
+# ---------------------------------------------------------------------------
+# Confluent / Kafka — prop lifecycle event backbone (producer side)
+# ---------------------------------------------------------------------------
+# The event backbone is entirely feature-flagged behind KAFKA_ENABLED. When it
+# is false/unset (the default), the producer is a strict no-op and the
+# confluent-kafka client library is never imported or required at runtime.
+#
+# These env var names are shared verbatim with the app-backend consumer so both
+# services connect to the same Confluent Cloud cluster and topic.
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse a boolean-ish environment variable ("1"/"true"/"yes"/"on")."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Master switch. Default False → the entire Kafka path is inert.
+KAFKA_ENABLED: bool = _env_flag("KAFKA_ENABLED", False)
+
+# Confluent Cloud bootstrap endpoint, e.g. "pkc-xxxxx.us-east-1.aws.confluent.cloud:9092".
+KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+
+# SASL credentials (Confluent API key/secret). Treated as secrets — never logged.
+KAFKA_API_KEY: str = os.environ.get("KAFKA_API_KEY", "")
+KAFKA_API_SECRET: str = os.environ.get("KAFKA_API_SECRET", "")
+
+# Topic that carries prop lifecycle events. MUST match the consumer.
+KAFKA_TOPIC: str = os.environ.get("KAFKA_TOPIC", "artifact.prop.events")
+
+# Confluent Cloud defaults: SASL over TLS with PLAIN mechanism.
+KAFKA_SECURITY_PROTOCOL: str = os.environ.get("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+KAFKA_SASL_MECHANISM: str = os.environ.get("KAFKA_SASL_MECHANISM", "PLAIN")

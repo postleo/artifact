@@ -10,6 +10,8 @@ import { initDatabase } from './db.js';
 import { Profile } from './models/Profile.js';
 import { Prop } from './models/Prop.js';
 import { StudioState } from './models/StudioState.js';
+import * as sseHub from './events/sseHub.js';
+import { startPropEventConsumer, stopPropEventConsumer } from './events/kafkaConsumer.js';
 
 dotenv.config();
 
@@ -363,6 +365,44 @@ app.get('/api/props/:id/events', (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Live prop lifecycle stream (backed by the Kafka consumer + in-process SSE hub).
+//
+// Unlike `/api/props/:id/events` (which proxies the agent-system's own SSE
+// stream), this endpoint delivers PropEvents that arrive over the Kafka prop
+// event backbone. When KAFKA_ENABLED is false no events flow, but the endpoint
+// still opens a valid (idle) SSE stream so the client contract is unchanged.
+// ---------------------------------------------------------------------------
+app.get('/api/props/:id/live', (req, res) => {
+  const { id } = req.params;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  // Disable proxy buffering (e.g. nginx) so events are delivered immediately.
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Register with the in-process hub; it installs its own disconnect cleanup.
+  sseHub.addClient(id, res);
+
+  // Emit an initial comment so intermediaries flush headers and the client
+  // knows the stream is open.
+  res.write(`: subscribed to prop ${id}\n\n`);
+
+  // Heartbeat to keep intermediaries from closing an idle connection.
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(': ping\n\n');
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseHub.removeClient(id, res);
+    console.log(`[SSE Live] Client disconnected from live stream ${id}`);
+  });
+});
+
 // Helper: Syncs our local App Database with the Agent System's record
 async function syncPropWithAgent(propId: string) {
   try {
@@ -553,12 +593,41 @@ async function startServer() {
     console.error('[Startup] Database initialization failed; exiting.', err);
     process.exit(1);
   }
-  app.listen(PORT, () => {
+
+  // Start the Kafka prop-event consumer only when the feature flag is on.
+  // startPropEventConsumer() is itself a no-op when KAFKA_ENABLED !== 'true',
+  // and never throws — so an unavailable broker cannot block server startup.
+  const KAFKA_ENABLED = String(process.env.KAFKA_ENABLED || '').toLowerCase() === 'true';
+  if (KAFKA_ENABLED) {
+    console.log('[Startup] KAFKA_ENABLED=true — starting prop event consumer.');
+    void startPropEventConsumer();
+  }
+
+  const server = app.listen(PORT, () => {
     console.log(`============================================================`);
     console.log(`  🚀 STANDALONE APP BACKEND SERVING AT http://localhost:${PORT}`);
     console.log(`  🔗 connected TO AGENT SYSTEM AT ${AGENT_SYSTEM_URL}`);
+    console.log(`  📨 KAFKA PROP EVENT BACKBONE: ${KAFKA_ENABLED ? 'ENABLED' : 'disabled'}`);
     console.log(`============================================================`);
   });
+
+  // Graceful shutdown: stop accepting connections, then disconnect the consumer
+  // so the Kafka consumer group rebalances promptly.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Shutdown] Received ${signal}; shutting down gracefully...`);
+    server.close(() => console.log('[Shutdown] HTTP server closed.'));
+    stopPropEventConsumer()
+      .catch((err) => console.error('[Shutdown] Error stopping consumer:', err))
+      .finally(() => {
+        // Give in-flight work a brief window, then exit.
+        setTimeout(() => process.exit(0), 500);
+      });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();

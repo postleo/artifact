@@ -14,7 +14,8 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "jsonwebtoken": "^9.0.2",
-    "@google-cloud/firestore": "^7.11.0"
+    "@google-cloud/firestore": "^7.11.0",
+    "kafkajs": "^2.2.4"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

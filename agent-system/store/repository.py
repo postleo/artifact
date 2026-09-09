@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from store.models import PropRecord, PropStatus, assert_valid_transition
+from events.producer import publish_prop_event
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +86,8 @@ class FirestorePropRepository(PropRepository):
         prop.created_at = datetime.now(timezone.utc)
         prop.updated_at = datetime.now(timezone.utc)
         await self._col.document(prop.id).set(prop.model_dump(mode="json"))
+        # Additive, flag-gated: emit the initial lifecycle event (e.g. "draft").
+        publish_prop_event(prop)
         return prop
 
     async def update(self, prop: PropRecord) -> PropRecord:
@@ -112,7 +115,10 @@ class FirestorePropRepository(PropRepository):
             txn.set(doc_ref, data)
             return PropRecord(**data)
 
-        return await _txn(transaction)
+        result = await _txn(transaction)
+        # Additive, flag-gated: publish the confirmed status transition.
+        publish_prop_event(result)
+        return result
 
     async def list_by_status(self, status: PropStatus) -> List[PropRecord]:
         query = self._col.where("status", "==", status.value)
@@ -159,6 +165,8 @@ class InMemoryPropRepository(PropRepository):
         prop.created_at = datetime.now(timezone.utc)
         prop.updated_at = datetime.now(timezone.utc)
         self._props[prop.id] = prop.model_copy(deep=True)
+        # Additive, flag-gated: emit the initial lifecycle event (e.g. "draft").
+        publish_prop_event(prop)
         return prop.model_copy(deep=True)
 
     async def update(self, prop: PropRecord) -> PropRecord:
@@ -176,7 +184,10 @@ class InMemoryPropRepository(PropRepository):
         prop.status = target_status
         prop.updated_at = datetime.now(timezone.utc)
         self._props[prop_id] = prop.model_copy(deep=True)
-        return prop.model_copy(deep=True)
+        result = prop.model_copy(deep=True)
+        # Additive, flag-gated: publish the confirmed status transition.
+        publish_prop_event(result)
+        return result
 
     async def list_by_status(self, status: PropStatus) -> List[PropRecord]:
         return [p for p in self._props.values() if p.status == status]

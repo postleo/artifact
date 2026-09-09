@@ -1,53 +1,25 @@
-import { DataTypes, Model } from 'sequelize';
-import { sequelize } from '../db.js';
+import { firestore, wrapDoc } from '../db.js';
+
+// Production profile — a single document. Stored in a namespaced collection so it
+// never collides with the agent-system's own Firestore collections.
+const col = firestore.collection('app_profiles');
+const DOC_ID = 'default';
 
 export interface ProfileAttributes {
-  id?: number;
   projectName: string;
   worldLore: string;
   departmentRole: string;
   leadName: string;
 }
 
-export class Profile extends Model<ProfileAttributes> implements ProfileAttributes {
-  public id!: number;
-  public projectName!: string;
-  public worldLore!: string;
-  public departmentRole!: string;
-  public leadName!: string;
-}
-
-Profile.init(
-  {
-    id: {
-      type: DataTypes.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    },
-    projectName: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      defaultValue: 'Chronicles of Aethelgard',
-    },
-    worldLore: {
-      type: DataTypes.TEXT,
-      allowNull: false,
-      defaultValue: 'Steampunk / Gilded Age of Drift',
-    },
-    departmentRole: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      defaultValue: 'Lead Prop Master',
-    },
-    leadName: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      defaultValue: 'Isla Venn',
-    },
-  },
-  {
-    sequelize,
-    modelName: 'Profile',
-    tableName: 'profiles',
+export class Profile {
+  static async findOne() {
+    const snap = await col.doc(DOC_ID).get();
+    return snap.exists ? wrapDoc(col.doc(DOC_ID), snap.data() as ProfileAttributes) : null;
   }
-);
+
+  static async create(data: ProfileAttributes) {
+    await col.doc(DOC_ID).set(data);
+    return wrapDoc(col.doc(DOC_ID), data);
+  }
+}

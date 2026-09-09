@@ -14,3 +14,5 @@ old-files/
 docs/agent-handoff.md
 01-project-spec.md
 docs/agent-handoff-git-403-fix.md
+agent-system/.venv/
+verification/images/

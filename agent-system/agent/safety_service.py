@@ -211,7 +211,10 @@ class GeminiSafetyService(SafetyService):
                 logger.debug("Moderation clean for image %s", ref)
             except Exception as exc:
                 logger.error("Moderation check failed for %s: %s", ref, exc)
-                return "clean"
+                # Fail safe: an unverifiable image is treated as flagged so unsafe
+                # content cannot slip through on error. Requires explicit human
+                # acknowledgement to export (see /export acknowledge_risk).
+                return "flagged"
 
         return "clean"
 

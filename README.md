@@ -106,6 +106,6 @@ npm run dev
 * **Go deeper:** See [app-backend/README.md](/app-backend/README.md).
 
 ### 🤖 Core Agent reasoning Engine (`/agent-system/`)
-* **What it is:** The intelligence core. Built natively on **Google ADK** (Agent Development Kit), it runs three specialized sub-agents (`OptionsGenerator`, `SelectionRecorder`, `AssetFinisher`) using Gemini models to draft design specifications, run trademark checks, and output seed-locked multi-angle turnaround images. It also includes an independent interactive command-line tool (`cli.py`).
-* **Tech Stack:** Python 3.12, FastAPI, google-adk, google-genai, Firestore (production).
+* **What it is:** The intelligence core. Built on **Google ADK** (Agent Development Kit) with the **Google Gen AI SDK**, it runs three specialized sub-agents (`OptionsGenerator`, `SelectionRecorder`, `AssetFinisher`) as ADK `LlmAgent`s (via `InMemoryRunner`) using Gemini models to draft design specifications and run trademark checks, and generates seed-locked multi-angle turnaround images with Nano Banana (Gemini image) models. A small local `agent/adk/` layer provides offline-safe ADK-style helpers for tests/CLI. It also includes an independent interactive command-line tool (`cli.py`). Deploys to **Vertex AI Agent Engine** (Agent Builder).
+* **Tech Stack:** Python 3.12, FastAPI, google-adk, google-genai, Firestore (production), Vertex AI Agent Engine.
 * **Go deeper:** See [agent-system/README.md](/agent-system/README.md).

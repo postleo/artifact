@@ -8,6 +8,7 @@
 
 import { ScriptExtraction } from '../types';
 import { parseCustomScript } from '../data/sampleScripts';
+import { authHeader } from './auth';
 
 export interface AgentStepProgress {
   stepIndex: number;
@@ -40,7 +41,10 @@ export interface AgentAnalysisResult {
   steps: AgentStepProgress[];
 }
 
-const DEFAULT_AGENT_BASE_URL = 'http://localhost:8000/v1';
+// Base URL of the App Backend API. Configurable via VITE_BACKEND_URL; defaults to
+// the local Express backend. The backend exposes POST /analyze-script.
+const DEFAULT_AGENT_BASE_URL =
+  (import.meta.env?.VITE_BACKEND_URL as string | undefined) || 'http://localhost:5000/api';
 
 export class ArtifactAgentSystemClient {
   private baseUrl: string;
@@ -108,11 +112,11 @@ export class ArtifactAgentSystemClient {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1200);
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-      const res = await fetch(`${this.baseUrl}/agent/script-analyst`, {
+      const res = await fetch(`${this.baseUrl}/analyze-script`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ script_text: scriptText }),
         signal: controller.signal
       });
@@ -123,7 +127,7 @@ export class ArtifactAgentSystemClient {
         isBackendConnected = true;
       }
     } catch {
-      // Backend not running or timeout; subagent engine executes locally with intelligent domain synthesis
+      // Backend not running or timeout; fall back to local heuristic parsing.
       isBackendConnected = false;
     }
 
@@ -150,35 +154,35 @@ export class ArtifactAgentSystemClient {
     await new Promise((r) => setTimeout(r, 200));
     steps[3].status = 'completed';
 
-    // Parse data via Artifact Agent heuristics or backend
+    // Prefer the backend's extraction when connected; otherwise use local heuristics.
     const parsed = parseCustomScript(scriptText);
+    const be = (isBackendConnected && backendData?.extraction) ? backendData.extraction : {};
     const fullExtraction: ScriptExtraction = {
       id: `agent-ext-${Date.now()}`,
-      title: parsed.title || 'Screenplay Scene Extract',
-      sceneHeading: parsed.sceneHeading || 'EXT. SCENE - DAY',
-      sceneNumber: parsed.sceneNumber || 'SCENE 01',
-      propName: parsed.propName || 'Hero Prop',
-      world: parsed.world || 'Cinematic Production',
-      era: parsed.era || 'Contemporary / Speculative',
-      shortDescription: parsed.shortDescription || 'Key narrative prop extracted from screenplay.',
-      functionOnScreen: parsed.functionOnScreen || 'Hero object used by character.',
-      constraints: parsed.constraints || 'Standard camera handling.',
+      title: be.title || parsed.title || 'Screenplay Scene Extract',
+      sceneHeading: be.sceneHeading || parsed.sceneHeading || 'EXT. SCENE - DAY',
+      sceneNumber: be.sceneNumber || parsed.sceneNumber || 'SCENE 01',
+      propName: be.propName || parsed.propName || 'Hero Prop',
+      world: be.world || parsed.world || 'Cinematic Production',
+      era: be.era || parsed.era || 'Contemporary / Speculative',
+      shortDescription: be.shortDescription || parsed.shortDescription || 'Key narrative prop extracted from screenplay.',
+      functionOnScreen: be.functionOnScreen || parsed.functionOnScreen || 'Hero object used by character.',
+      constraints: be.constraints || parsed.constraints || 'Standard camera handling.',
       scriptText: scriptText,
-      suggestedMaterials: parsed.suggestedMaterials || ['Machined Alloy', 'Optical Glass']
+      suggestedMaterials: be.suggestedMaterials || parsed.suggestedMaterials || ['Machined Alloy', 'Optical Glass']
     };
     const endTime = performance.now();
 
     const telemetry: AgentRunTelemetry = {
       agentSessionId: sessionId,
-      subagentChain: [
-        'ScriptAnalystSubagent@v2.1',
-        'ContinuityGuardSubagent@v1.8',
-        'StuntToleranceSubagent@v1.4',
-        'BriefSynthesizerSubagent@v2.0'
-      ],
+      // Only claim a subagent chain when we actually reached the backend.
+      subagentChain: isBackendConnected
+        ? ['ScriptAnalystSubagent', 'ContinuityGuardSubagent', 'StuntToleranceSubagent', 'BriefSynthesizerSubagent']
+        : ['local-heuristic-parser'],
       executionTimeMs: Math.round(endTime - startTime),
-      engine: 'artifact_agent_system_subagent',
-      continuityChecksPassed: true,
+      engine: isBackendConnected ? 'artifact_agent_system_subagent' : 'fallback_ai_parser',
+      // Continuity is only actually validated when the backend ran.
+      continuityChecksPassed: isBackendConnected,
       stuntRiskScore: (fullExtraction.constraints.toLowerCase().includes('water') || fullExtraction.constraints.toLowerCase().includes('stunt')) ? 'HIGH' : 'LOW',
       tokensProcessed: scriptText.split(/\s+/).length * 4,
       backendEndpoint: this.baseUrl,

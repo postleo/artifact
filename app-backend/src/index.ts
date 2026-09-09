@@ -12,6 +12,7 @@ import { Prop } from './models/Prop.js';
 import { StudioState } from './models/StudioState.js';
 import * as sseHub from './events/sseHub.js';
 import { startPropEventConsumer, stopPropEventConsumer } from './events/kafkaConsumer.js';
+import { applyPropEvent, parsePropEvent } from './events/propEvents.js';
 
 dotenv.config();
 
@@ -36,6 +37,8 @@ app.use(express.json());
 const APP_ACCESS_PASSWORD = process.env.APP_ACCESS_PASSWORD || '';
 const APP_JWT_SECRET = process.env.APP_JWT_SECRET || '';
 const AUTH_ENABLED = Boolean(APP_ACCESS_PASSWORD && APP_JWT_SECRET);
+// Shared bearer token for the machine-to-machine prop-event webhook (agent -> backend).
+const APP_EVENT_WEBHOOK_TOKEN = process.env.APP_EVENT_WEBHOOK_TOKEN || '';
 const JWT_TTL_SECONDS = 60 * 60 * 12; // 12 hours
 
 function safeEqual(a: string, b: string): boolean {
@@ -136,6 +139,9 @@ app.get('/api/props', async (req, res) => {
 app.get('/api/props/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    // Refresh the local mirror from the agent so polling returns real progress,
+    // mapped options, and signed image URLs (no-op-safe if the agent is unreachable).
+    await syncPropWithAgent(id);
     const prop = await Prop.findByPk(id);
     if (!prop) {
       return res.status(404).json({ error: `Prop ${id} not found` });
@@ -151,14 +157,34 @@ app.post('/api/props', async (req, res) => {
   try {
     const { name, description, n_options, budget_ceiling_usd } = req.body;
 
-    // Create the body required by the standalone Python agent system
+    // Create the body required by the standalone Python agent system, built from the
+    // real brief the frontend collected (not a hardcoded placeholder).
+    const {
+      world,
+      era,
+      functionOnScreen,
+      shortDescription,
+      constraints,
+    } = req.body as Record<string, any>;
+
+    const onScreen: string[] = [functionOnScreen, shortDescription]
+      .filter((s) => typeof s === 'string' && s.trim())
+      .flatMap((s: string) => s.split(/[\n;]+/))
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const constraintList: string[] = (typeof constraints === 'string' ? constraints : '')
+      .split(/[\n;.]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const agentPayload = {
       project_id: 'artifact-onboarding',
       brief: {
         what: name,
-        on_screen: ['Studied closely by camera', 'Held by lead actor'],
-        era: 'Steampunk Gilded Age',
-        constraints: ['Brass finishing', 'Must be lightweight'],
+        on_screen: onScreen.length ? onScreen : ['Studied closely by camera', 'Held by lead actor'],
+        era: [world, era].filter(Boolean).join(' — ') || 'Contemporary / Speculative',
+        constraints: constraintList.length ? constraintList : ['Screen-accurate scale'],
       },
       reference_image_refs: [],
       n_options: n_options || 3,
@@ -401,6 +427,32 @@ app.get('/api/props/:id/live', (req, res) => {
     sseHub.removeClient(id, res);
     console.log(`[SSE Live] Client disconnected from live stream ${id}`);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Prop-event webhook (PUSH model — the default, scale-to-zero delivery path).
+// The agent-system POSTs each lifecycle event here; Cloud Run spins up on demand,
+// so no always-on Kafka consumer is needed. This route is intentionally OUTSIDE
+// the JWT-guarded /api namespace (browsers use JWT; the agent is machine-to-machine)
+// and is guarded by its own shared bearer token (APP_EVENT_WEBHOOK_TOKEN).
+// ---------------------------------------------------------------------------
+app.post('/hooks/prop-event', async (req, res) => {
+  if (APP_EVENT_WEBHOOK_TOKEN) {
+    const auth = req.header('authorization') || '';
+    const m = auth.match(/^Bearer (.+)$/);
+    if (!m || m[1] !== APP_EVENT_WEBHOOK_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+  const event = parsePropEvent(req.body);
+  if (!event) return res.status(400).json({ error: 'Invalid prop event payload' });
+  try {
+    await applyPropEvent(event);
+    return res.status(204).end();
+  } catch (err: any) {
+    console.error('[Webhook] Failed to apply prop event:', err);
+    return res.status(500).json({ error: 'Failed to apply event' });
+  }
 });
 
 // Helper: Syncs our local App Database with the Agent System's record

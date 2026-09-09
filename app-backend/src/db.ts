@@ -9,7 +9,12 @@ dotenv.config();
 // For local development, point FIRESTORE_EMULATOR_HOST at the Firestore emulator.
 const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || undefined;
 
-export const firestore = new Firestore(projectId ? { projectId } : {});
+// ignoreUndefinedProperties: writes silently drop undefined fields instead of
+// throwing (robust against optional/omitted brief fields from the API).
+const firestoreSettings: Record<string, unknown> = { ignoreUndefinedProperties: true };
+if (projectId) firestoreSettings.projectId = projectId;
+
+export const firestore = new Firestore(firestoreSettings);
 
 /**
  * Wrap a Firestore document's data as a plain, JSON-serialisable object that also

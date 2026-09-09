@@ -16,6 +16,30 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Global image-generation rate limiter.
+# Image models (esp. Nano Banana Pro) have a low PER-MINUTE quota. To avoid 429s
+# we serialize all image calls across the process and space them by a minimum
+# interval, so generation happens ~1-2 at a time rather than in a burst.
+# Tune with IMAGE_GEN_MIN_INTERVAL_SEC (default 30s ≈ 2 images/min).
+# ---------------------------------------------------------------------------
+_IMAGE_GEN_MIN_INTERVAL_SEC = float(os.environ.get("IMAGE_GEN_MIN_INTERVAL_SEC", "30"))
+_image_rate_lock = asyncio.Lock()
+_image_last_call = 0.0
+
+
+async def _image_rate_limit() -> None:
+    """Block until at least the min interval has elapsed since the last image call."""
+    global _image_last_call
+    async with _image_rate_lock:
+        import time
+        wait = _IMAGE_GEN_MIN_INTERVAL_SEC - (time.monotonic() - _image_last_call)
+        if wait > 0:
+            logger.info("Rate-limiting image generation: waiting %.1fs to stay under quota", wait)
+            await asyncio.sleep(wait)
+        _image_last_call = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
 # Abstract interface — keeps the image generation backend swappable
 # ---------------------------------------------------------------------------
 
@@ -149,6 +173,8 @@ class GCSImageJobRunner(ImageJobRunner):
             )
             asset_refs["turnaround"].append(ref)
 
+        # Full detail-callout + variant set. The global rate limiter spaces every image
+        # call to stay under the per-minute quota, so we keep the complete asset package.
         callout_prompts = ["mechanism detail", "surface markings", "wear and patina"]
         for cp in callout_prompts:
             ref = await self._generate_and_store(
@@ -212,11 +238,34 @@ class GCSImageJobRunner(ImageJobRunner):
             **({"seed": seed} if seed else {}),
         )
 
-        result = self._client.models.generate_content(
-            model=model_id,
-            contents=[prompt],
-            config=config,
-        )
+        # Generate with retry + backoff on 429 / RESOURCE_EXHAUSTED. Final-asset jobs
+        # fire several image calls in sequence, and image models can have a low
+        # per-minute quota — so we back off and retry rather than fail the whole stage.
+        result = None
+        last_err: Exception | None = None
+        for attempt in range(6):
+            await _image_rate_limit()  # space calls to stay under the per-minute quota
+            try:
+                result = self._client.models.generate_content(
+                    model=model_id,
+                    contents=[prompt],
+                    config=config,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    wait = min(60, 8 * (2 ** attempt))
+                    logger.warning(
+                        "Image quota 429 for %s (attempt %d/6) — backing off %ss",
+                        label, attempt + 1, wait,
+                    )
+                    last_err = exc
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+        if result is None:
+            raise RuntimeError(f"Image generation exhausted retries for {label!r}: {last_err}")
 
         # Extract the first inline image part from the response.
         image_data = None

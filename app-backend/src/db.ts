@@ -1,48 +1,41 @@
-import { Sequelize } from 'sequelize';
+import { Firestore, DocumentReference } from '@google-cloud/firestore';
 import dotenv from 'dotenv';
-import path from 'path';
 
 dotenv.config();
 
-const isProduction = process.env.NODE_ENV === 'production';
-const databaseUrl = process.env.DATABASE_URL;
+// Firestore (Native mode) is fully serverless: no provisioned capacity, no idle
+// cost, scales to zero. On Cloud Run it authenticates via Application Default
+// Credentials; the project is auto-detected but we set it explicitly when provided.
+// For local development, point FIRESTORE_EMULATOR_HOST at the Firestore emulator.
+const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || undefined;
 
-export let sequelize: Sequelize;
+export const firestore = new Firestore(projectId ? { projectId } : {});
 
-if (databaseUrl) {
-  console.log('[Database] Connecting to PostgreSQL database...');
-  sequelize = new Sequelize(databaseUrl, {
-    dialect: 'postgres',
-    logging: false,
-    dialectOptions: isProduction
-      ? {
-          ssl: {
-            require: true,
-            rejectUnauthorized: false,
-          },
-        }
-      : {},
+/**
+ * Wrap a Firestore document's data as a plain, JSON-serialisable object that also
+ * carries a non-enumerable async `update(patch)` method. This mirrors the small
+ * slice of the old Sequelize model API the route handlers rely on (`res.json(doc)`
+ * and `doc.update({...})`) so the route layer needs no changes. The hidden method
+ * is excluded from JSON responses and from what is persisted back.
+ */
+export function wrapDoc<T extends Record<string, any>>(
+  docRef: DocumentReference,
+  data: T
+): T & { update: (patch: Partial<T>) => Promise<T> } {
+  const obj: any = { ...data };
+  Object.defineProperty(obj, 'update', {
+    enumerable: false,
+    value: async (patch: Record<string, any>) => {
+      Object.assign(obj, patch);
+      const plain: Record<string, any> = { ...obj }; // enumerable fields only
+      await docRef.set(plain, { merge: true });
+      return obj;
+    },
   });
-} else {
-  console.log('[Database] Connecting to local SQLite database...');
-  sequelize = new Sequelize({
-    dialect: 'sqlite',
-    storage: path.join(process.cwd(), 'db.sqlite'),
-    logging: false,
-  });
+  return obj;
 }
 
 export async function initDatabase() {
-  try {
-    await sequelize.authenticate();
-    console.log('[Database] Connection has been established successfully.');
-    // In production prefer migrations; `alter` is dev-only to avoid destructive
-    // schema drift. Plain sync() in production creates missing tables without altering.
-    await sequelize.sync(isProduction ? {} : { alter: true });
-    console.log('[Database] Models synchronized with the database schema.');
-  } catch (error) {
-    console.error('[Database] Unable to connect to the database:', error);
-    // Fail fast: do not let the server start up in a broken, DB-less state.
-    throw error;
-  }
+  // Firestore is serverless — there is no connection to establish or pool to warm.
+  console.log('[Database] Using Firestore (Native mode, serverless, scales to zero).');
 }

@@ -55,7 +55,18 @@ class GCSImageJobRunner(ImageJobRunner):
 
     def __init__(self, repo: Any, storage_client: Any) -> None:
         from google import genai  # type: ignore  (google-genai unified SDK)
-        self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+        # Honor Vertex AI mode (consistent with the rest of the system) when
+        # GOOGLE_GENAI_USE_VERTEXAI is set; otherwise use a Gemini API key.
+        use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true", "yes")
+        if use_vertex:
+            self._client = genai.Client(
+                vertexai=True,
+                project=os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT"),
+                location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+            )
+        else:
+            self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         self._repo = repo
         self._storage = storage_client  # google.cloud.storage.Client
 
@@ -189,29 +200,38 @@ class GCSImageJobRunner(ImageJobRunner):
             logger.debug("Cache hit for %s: reusing %s", cache_key, existing)
             return existing
 
-        # Generate the image via the google-genai unified SDK (Imagen models).
+        # Generate the image via the google-genai unified SDK using a Nano Banana
+        # (Gemini image) model. Gemini image models generate through generate_content
+        # with response_modalities including IMAGE — NOT the Imagen generate_images API.
         from google.genai import types as genai_types  # type: ignore
 
-        # Per Vertex AI / Imagen docs, a deterministic `seed` is only accepted when
-        # the SynthID watermark is disabled — the two are mutually exclusive. We only
-        # pass a seed (and disable the watermark) when a non-zero seed is requested
-        # (final seed-locked turnarounds); drafts keep the default watermark.
-        config_kwargs: dict = {
-            "number_of_images": 1,
-            "aspect_ratio": "1:1",
-            "output_mime_type": "image/png",
-        }
-        if seed:
-            config_kwargs["seed"] = seed
-            config_kwargs["add_watermark"] = False
-
-        result = self._client.models.generate_images(
-            model=model_id,
-            prompt=prompt,
-            config=genai_types.GenerateImagesConfig(**config_kwargs),
+        # A deterministic seed keeps multi-view final turnarounds visually consistent.
+        # SynthID watermarking is always applied to Nano Banana output.
+        config = genai_types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            **({"seed": seed} if seed else {}),
         )
 
-        image_data = result.generated_images[0].image.image_bytes
+        result = self._client.models.generate_content(
+            model=model_id,
+            contents=[prompt],
+            config=config,
+        )
+
+        # Extract the first inline image part from the response.
+        image_data = None
+        for candidate in (result.candidates or []):
+            content = getattr(candidate, "content", None)
+            for part in (getattr(content, "parts", None) or []):
+                inline = getattr(part, "inline_data", None)
+                if inline is not None and getattr(inline, "data", None):
+                    image_data = inline.data
+                    break
+            if image_data is not None:
+                break
+        if image_data is None:
+            raise RuntimeError(f"No image returned by model {model_id!r} for label {label!r}")
+
         object_name = f"{cache_key}/{uuid.uuid4().hex}.png"
         blob = bucket.blob(object_name)
         blob.upload_from_string(image_data, content_type="image/png")

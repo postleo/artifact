@@ -2,9 +2,9 @@
 config.py — single source of truth for all model IDs, budgets, and SLAs.
 Swap model names here without touching any other file.
 
-Model IDs confirmed against official Google documentation (2025):
-  Gemini text  — https://ai.google.dev/gemini-api/docs/models
-  Imagen image — https://cloud.google.com/vertex-ai/generative-ai/docs/image/generate-images
+Model IDs confirmed against official Google documentation:
+  Gemini text        — https://ai.google.dev/gemini-api/docs/models
+  Nano Banana (image) — https://ai.google.dev/gemini-api/docs/image-generation
 """
 import os
 
@@ -12,26 +12,26 @@ import os
 # Gemini reasoning models (GA, confirmed June 2025)
 # ---------------------------------------------------------------------------
 # Fast tier: routine steps — parsing, brief writing, spec text, orchestration.
-# gemini-2.0-flash is the current stable fast-tier GA model.
-GEMINI_FAST_MODEL: str = os.environ.get("GEMINI_FAST_MODEL", "gemini-2.0-flash")
+# gemini-2.5-flash is a broadly-available stable fast-tier GA model.
+GEMINI_FAST_MODEL: str = os.environ.get("GEMINI_FAST_MODEL", "gemini-2.5-flash")
 
 # Pro/strong tier: escalate only for genuinely hard reasoning.
 # gemini-2.5-pro is the current stable high-capability GA model.
 GEMINI_PRO_MODEL: str = os.environ.get("GEMINI_PRO_MODEL", "gemini-2.5-pro")
 
 # ---------------------------------------------------------------------------
-# Image generation models (Imagen, via the google-genai `generate_images` API)
-# "Nano Banana 2"  → fast, cheap concept drafts (Imagen Fast).
-# "Nano Banana Pro" → high-fidelity final hero assets (Imagen high quality).
-# NOTE: These are Imagen model IDs and are invoked with client.models.generate_images.
-#       Do NOT set these to Gemini image models (e.g. gemini-*-image); those use the
-#       generate_content API instead and are not compatible with this code path.
+# Image generation models (Nano Banana — Gemini image models, via the
+# google-genai `generate_content` API with response_modalities=["IMAGE"]).
+#   "Nano Banana 2"   → Gemini 3.1 Flash Image  (fast, minor/draft jobs)
+#   "Nano Banana Pro" → Gemini 3 Pro Image      (high fidelity, main/final jobs)
+# NOTE: These are Gemini image models invoked with client.models.generate_content.
+#       They are NOT Imagen models and must not be called via generate_images.
 # ---------------------------------------------------------------------------
-# Nano Banana 2 — fast, low-cost; used for concept-option drafts.
-NB2_MODEL: str = os.environ.get("NB2_MODEL", "imagen-4.0-fast-generate-001")
+# Nano Banana 2 — fast, low-cost; used for concept-option drafts (minor jobs).
+NB2_MODEL: str = os.environ.get("NB2_MODEL", "gemini-3.1-flash-image")
 
 # Nano Banana Pro — high fidelity; used only for the selected prop's final assets.
-NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "imagen-4.0-generate-001")
+NBPRO_MODEL: str = os.environ.get("NBPRO_MODEL", "gemini-3-pro-image")
 
 # ---------------------------------------------------------------------------
 # Image resolution settings
@@ -75,8 +75,52 @@ GCS_BUCKET_NAME: str = os.environ.get("GCS_BUCKET_NAME", "artifact-assets")
 SIGNED_URL_EXPIRY_SECONDS: int = int(os.environ.get("SIGNED_URL_EXPIRY_SECONDS", "3600"))
 
 # ---------------------------------------------------------------------------
-# Gemini Enterprise Agent Platform
+# Vertex AI Agent Engine (Agent Builder) — deployment & runtime
 # ---------------------------------------------------------------------------
-AGENT_PLATFORM_ENDPOINT: str = os.environ.get(
-    "AGENT_PLATFORM_ENDPOINT", "https://dialogflow.googleapis.com"
-)
+# Full resource name of a deployed Agent Engine, e.g.
+#   projects/PROJECT_NUMBER/locations/us-central1/reasoningEngines/1234567890
+# When set (and USE_STUBS is false), the service routes reasoning to the deployed
+# Agent Engine. When empty, it runs the ADK agents in-process (LocalADKAdapter).
+AGENT_ENGINE_RESOURCE_NAME: str = os.environ.get("AGENT_ENGINE_RESOURCE_NAME", "")
+
+# GCS staging bucket used when deploying to Agent Engine (gs://... or bare name).
+VERTEX_STAGING_BUCKET: str = os.environ.get("VERTEX_STAGING_BUCKET", "")
+
+# When "true"/"1", the Gen AI SDK and ADK use Vertex AI (ADC) instead of the
+# Gemini API key. Required for Agent Engine / production GCP deployments.
+GOOGLE_GENAI_USE_VERTEXAI: str = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "")
+
+
+# ---------------------------------------------------------------------------
+# Confluent / Kafka — prop lifecycle event backbone (producer side)
+# ---------------------------------------------------------------------------
+# The event backbone is entirely feature-flagged behind KAFKA_ENABLED. When it
+# is false/unset (the default), the producer is a strict no-op and the
+# confluent-kafka client library is never imported or required at runtime.
+#
+# These env var names are shared verbatim with the app-backend consumer so both
+# services connect to the same Confluent Cloud cluster and topic.
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse a boolean-ish environment variable ("1"/"true"/"yes"/"on")."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Master switch. Default False → the entire Kafka path is inert.
+KAFKA_ENABLED: bool = _env_flag("KAFKA_ENABLED", False)
+
+# Confluent Cloud bootstrap endpoint, e.g. "pkc-xxxxx.us-east-1.aws.confluent.cloud:9092".
+KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+
+# SASL credentials (Confluent API key/secret). Treated as secrets — never logged.
+KAFKA_API_KEY: str = os.environ.get("KAFKA_API_KEY", "")
+KAFKA_API_SECRET: str = os.environ.get("KAFKA_API_SECRET", "")
+
+# Topic that carries prop lifecycle events. MUST match the consumer.
+KAFKA_TOPIC: str = os.environ.get("KAFKA_TOPIC", "artifact.prop.events")
+
+# Confluent Cloud defaults: SASL over TLS with PLAIN mechanism.
+KAFKA_SECURITY_PROTOCOL: str = os.environ.get("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+KAFKA_SASL_MECHANISM: str = os.environ.get("KAFKA_SASL_MECHANISM", "PLAIN")

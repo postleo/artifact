@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import http from 'http';
 import https from 'https';
@@ -7,6 +9,9 @@ import { URL } from 'url';
 import { initDatabase } from './db.js';
 import { Profile } from './models/Profile.js';
 import { Prop } from './models/Prop.js';
+import { StudioState } from './models/StudioState.js';
+import * as sseHub from './events/sseHub.js';
+import { startPropEventConsumer, stopPropEventConsumer } from './events/kafkaConsumer.js';
 
 dotenv.config();
 
@@ -22,14 +27,48 @@ const corsOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((o) =
 app.use(cors({ origin: corsOrigins }));
 app.use(express.json());
 
-// Optional bearer auth for this backend's API. Enabled only when APP_API_TOKEN is
-// set (leave unset in local dev). Guards the money-spending proxy routes.
-const APP_API_TOKEN = process.env.APP_API_TOKEN || '';
+// ---------------------------------------------------------------------------
+// Authentication: password login -> short-lived signed JWT.
+// The access password and JWT signing secret live ONLY on the backend; nothing
+// secret ships to the browser. Auth is enforced only when both are configured
+// (leave unset in local dev to disable).
+// ---------------------------------------------------------------------------
+const APP_ACCESS_PASSWORD = process.env.APP_ACCESS_PASSWORD || '';
+const APP_JWT_SECRET = process.env.APP_JWT_SECRET || '';
+const AUTH_ENABLED = Boolean(APP_ACCESS_PASSWORD && APP_JWT_SECRET);
+const JWT_TTL_SECONDS = 60 * 60 * 12; // 12 hours
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+// Public: exchange the shared password for a JWT.
+app.post('/api/login', (req, res) => {
+  if (!AUTH_ENABLED) return res.json({ token: 'dev', authDisabled: true });
+  const password = (req.body && req.body.password) as unknown;
+  if (typeof password !== 'string' || !safeEqual(password, APP_ACCESS_PASSWORD)) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  const token = jwt.sign({ role: 'studio' }, APP_JWT_SECRET, { expiresIn: JWT_TTL_SECONDS });
+  return res.json({ token, expiresIn: JWT_TTL_SECONDS });
+});
+
+// Guard every other /api route with a valid Bearer JWT (when auth is enabled).
 app.use('/api', (req, res, next) => {
-  if (!APP_API_TOKEN) return next(); // auth disabled in dev
+  if (!AUTH_ENABLED) return next(); // auth disabled in dev
+  if (req.path === '/login') return next(); // login is public
   const auth = req.header('authorization') || '';
-  if (auth === `Bearer ${APP_API_TOKEN}`) return next();
-  return res.status(401).json({ error: 'Unauthorized' });
+  const match = auth.match(/^Bearer (.+)$/);
+  if (!match) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    jwt.verify(match[1], APP_JWT_SECRET);
+    return next();
+  } catch {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 
 // Helper for agent authorization headers
@@ -326,6 +365,44 @@ app.get('/api/props/:id/events', (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Live prop lifecycle stream (backed by the Kafka consumer + in-process SSE hub).
+//
+// Unlike `/api/props/:id/events` (which proxies the agent-system's own SSE
+// stream), this endpoint delivers PropEvents that arrive over the Kafka prop
+// event backbone. When KAFKA_ENABLED is false no events flow, but the endpoint
+// still opens a valid (idle) SSE stream so the client contract is unchanged.
+// ---------------------------------------------------------------------------
+app.get('/api/props/:id/live', (req, res) => {
+  const { id } = req.params;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  // Disable proxy buffering (e.g. nginx) so events are delivered immediately.
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Register with the in-process hub; it installs its own disconnect cleanup.
+  sseHub.addClient(id, res);
+
+  // Emit an initial comment so intermediaries flush headers and the client
+  // knows the stream is open.
+  res.write(`: subscribed to prop ${id}\n\n`);
+
+  // Heartbeat to keep intermediaries from closing an idle connection.
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(': ping\n\n');
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseHub.removeClient(id, res);
+    console.log(`[SSE Live] Client disconnected from live stream ${id}`);
+  });
+});
+
 // Helper: Syncs our local App Database with the Agent System's record
 async function syncPropWithAgent(propId: string) {
   try {
@@ -418,6 +495,49 @@ async function syncPropWithAgent(propId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 2a. Studio state persistence (DB-backed replacement for browser localStorage)
+// ---------------------------------------------------------------------------
+
+// Production profile (single record, stored under key 'profile').
+app.get('/api/studio/profile', async (_req, res) => {
+  try {
+    const row = await StudioState.findByPk('profile');
+    return res.json(row ? row.value : null);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/studio/profile', async (req, res) => {
+  try {
+    await StudioState.upsert({ key: 'profile', value: req.body ?? {} });
+    return res.json({ ok: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// The props slate (array), stored under key 'props'.
+app.get('/api/studio/props', async (_req, res) => {
+  try {
+    const row = await StudioState.findByPk('props');
+    return res.json(row ? row.value : []);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/studio/props', async (req, res) => {
+  try {
+    const list = Array.isArray(req.body) ? req.body : [];
+    await StudioState.upsert({ key: 'props', value: list });
+    return res.json({ ok: true, count: list.length });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 2b. Script Analysis (server-side heuristic extraction for onboarding)
 // ---------------------------------------------------------------------------
 
@@ -473,12 +593,41 @@ async function startServer() {
     console.error('[Startup] Database initialization failed; exiting.', err);
     process.exit(1);
   }
-  app.listen(PORT, () => {
+
+  // Start the Kafka prop-event consumer only when the feature flag is on.
+  // startPropEventConsumer() is itself a no-op when KAFKA_ENABLED !== 'true',
+  // and never throws — so an unavailable broker cannot block server startup.
+  const KAFKA_ENABLED = String(process.env.KAFKA_ENABLED || '').toLowerCase() === 'true';
+  if (KAFKA_ENABLED) {
+    console.log('[Startup] KAFKA_ENABLED=true — starting prop event consumer.');
+    void startPropEventConsumer();
+  }
+
+  const server = app.listen(PORT, () => {
     console.log(`============================================================`);
     console.log(`  🚀 STANDALONE APP BACKEND SERVING AT http://localhost:${PORT}`);
     console.log(`  🔗 connected TO AGENT SYSTEM AT ${AGENT_SYSTEM_URL}`);
+    console.log(`  📨 KAFKA PROP EVENT BACKBONE: ${KAFKA_ENABLED ? 'ENABLED' : 'disabled'}`);
     console.log(`============================================================`);
   });
+
+  // Graceful shutdown: stop accepting connections, then disconnect the consumer
+  // so the Kafka consumer group rebalances promptly.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Shutdown] Received ${signal}; shutting down gracefully...`);
+    server.close(() => console.log('[Shutdown] HTTP server closed.'));
+    stopPropEventConsumer()
+      .catch((err) => console.error('[Shutdown] Error stopping consumer:', err))
+      .finally(() => {
+        // Give in-flight work a brief window, then exit.
+        setTimeout(() => process.exit(0), 500);
+      });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();

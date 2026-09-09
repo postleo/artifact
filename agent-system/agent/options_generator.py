@@ -100,7 +100,10 @@ class OptionsGeneratorAgent:
                 ),
                 output_schema=OptionsResponseSchema,
             )
-            runner = InMemoryRunner(agent=adk_agent)
+            runner = InMemoryRunner(agent=adk_agent, app_name="artifact")
+            await runner.session_service.create_session(
+                app_name="artifact", user_id="default_user", session_id=prop.id
+            )
             content = types.Content(
                 role="user", parts=[types.Part(text=prompt)]
             )

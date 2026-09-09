@@ -73,14 +73,17 @@ This script will guide you through entering the prop's brief, generating draft c
 | `GCP_REGION` | No | GCP region (default: `us-central1`) |
 | `GCS_BUCKET_NAME` | Yes (prod) | Cloud Storage bucket for generated images |
 | `GOOGLE_API_KEY` | Yes (prod) | Google Gen AI SDK key (from Secret Manager) |
-| `GEMINI_FAST_MODEL` | No | Fast reasoning model ID (default: `gemini-2.0-flash`) |
+| `GEMINI_FAST_MODEL` | No | Fast reasoning model ID (default: `gemini-2.5-flash`) |
 | `GEMINI_PRO_MODEL` | No | Strong reasoning model ID (default: `gemini-2.5-pro`) |
-| `NB2_MODEL` | No | Nano Banana 2 Imagen model ID (default: `imagen-4.0-fast-generate-001`) |
-| `NBPRO_MODEL` | No | Nano Banana Pro Imagen model ID (default: `imagen-4.0-generate-001`) |
+| `NB2_MODEL` | No | Nano Banana 2 = Gemini 3.1 Flash Image (default: `gemini-3.1-flash-image`) |
+| `NBPRO_MODEL` | No | Nano Banana Pro = Gemini 3 Pro Image (default: `gemini-3-pro-image`) |
 | `DEFAULT_BUDGET_CEILING_USD` | No | Per-prop budget ceiling in USD (default: `5.0`) |
 | `OPTIONS_REVIEW_SLA_HOURS` | No | SLA before overdue-review alert (default: `48`) |
 | `SELECTION_SLA_HOURS` | No | SLA before overdue-finalize alert (default: `24`) |
 | `API_BEARER_TOKEN` | No | Bearer token for API auth (omit to disable in dev) |
+| `AGENT_ENGINE_RESOURCE_NAME` | No | Deployed Vertex AI Agent Engine resource name; if set, reasoning is routed to it (else ADK runs in-process) |
+| `VERTEX_STAGING_BUCKET` | Prod (deploy) | GCS staging bucket for Agent Engine deploys (`gs://...`) |
+| `GOOGLE_GENAI_USE_VERTEXAI` | Prod | `1`/`true` to use Vertex AI + ADC for Gen AI / ADK (instead of `GOOGLE_API_KEY`) |
 | `DAM_API_URL` | Yes (prod) | Asset library / DAM base URL |
 | `DAM_API_KEY` | Yes (prod) | DAM API key (from Secret Manager) |
 | `SENDGRID_API_KEY` | No | SendGrid key for email notifications |
@@ -126,7 +129,39 @@ All money-spending POSTs accept an `Idempotency-Key` header.
 
 ---
 
-## Deploying to Google Cloud (Cloud Run — scale to zero)
+## Deploying to Google Cloud
+
+The system deploys in two parts:
+1. The **ADK reasoning agent** → **Vertex AI Agent Engine** (Agent Builder).
+2. The **FastAPI service** (REST API + orchestration) → **Cloud Run**.
+
+### A. Deploy the ADK agent to Vertex AI Agent Engine
+
+```bash
+cd agent-system
+
+export GCP_PROJECT_ID=YOUR_GCP_PROJECT_ID
+export GCP_REGION=us-central1
+export VERTEX_STAGING_BUCKET=gs://YOUR_STAGING_BUCKET
+export GOOGLE_GENAI_USE_VERTEXAI=1
+
+# Deployment extras (Vertex SDK) — installed only for deployment:
+pip install "google-cloud-aiplatform[agent_engines,adk]>=1.95.0"
+
+python -m deploy.deploy_agent_engine
+```
+
+The script prints the deployed **Agent Engine resource name**. Set it on the API
+service so reasoning is routed to the deployed agent:
+
+```bash
+export AGENT_ENGINE_RESOURCE_NAME=projects/PNUM/locations/us-central1/reasoningEngines/ID
+```
+
+If `AGENT_ENGINE_RESOURCE_NAME` is left unset, the API runs the ADK agents
+in-process (`LocalADKAdapter`) — handy for a single-service deployment.
+
+### B. Deploy the FastAPI service to Cloud Run (scale to zero)
 
 ### 1. Build and push the container
 
@@ -153,7 +188,7 @@ gcloud run deploy artifact-agent \
   --allow-unauthenticated \
   --set-env-vars GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=artifact-assets \
   --set-secrets GOOGLE_API_KEY=artifact-google-api-key:latest,API_BEARER_TOKEN=artifact-api-token:latest \
-  --set-env-vars NB2_MODEL=imagen-4.0-fast-generate-001,NBPRO_MODEL=imagen-4.0-generate-001 \
+  --set-env-vars NB2_MODEL=gemini-3.1-flash-image,NBPRO_MODEL=gemini-3-pro-image \
   --min-instances 0 \
   --max-instances 10 \
   --memory 512Mi
@@ -219,11 +254,12 @@ budget_exceeded (resume after approval)
 
 | Role | Model ID | Notes |
 |------|----------|-------|
-| Fast reasoning | `gemini-2.0-flash` | Orchestration, parsing, brief writing |
+| Fast reasoning | `gemini-2.5-flash` | Orchestration, parsing, brief writing |
 | Strong reasoning | `gemini-2.5-pro` | Hard reasoning only, escalated selectively |
-| Concept draft images (Nano Banana 2) | `imagen-4.0-fast-generate-001` | Imagen fast tier — rapid draft concept options (`generate_images`) |
-| Final hero images (Nano Banana Pro) | `imagen-4.0-generate-001` | Imagen quality tier — high-fidelity final assets (`generate_images`) |
+| Concept draft images (Nano Banana 2) | `gemini-3.1-flash-image` | Gemini 3.1 Flash Image — fast draft concept options (minor jobs) |
+| Final hero images (Nano Banana Pro) | `gemini-3-pro-image` | Gemini 3 Pro Image — high-fidelity final assets (main jobs) |
 
 All IDs default-coded in `config.py` and overridable via environment variables.
-The image models are **Imagen** models invoked via `client.models.generate_images`;
-they are not interchangeable with Gemini image models (which use `generate_content`).
+The image models are **Nano Banana** (Gemini image) models invoked via
+`client.models.generate_content` with `response_modalities=["IMAGE"]`; they are not
+Imagen models and are not called through `generate_images`.

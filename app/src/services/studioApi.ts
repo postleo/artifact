@@ -93,3 +93,22 @@ export function createProp(input: CreatePropInput): Promise<PropItem> {
 export function getProp(id: string): Promise<PropItem> {
   return getJson<PropItem>(`/props/${encodeURIComponent(id)}`);
 }
+
+/** Gate 2 — record the chosen option (backend proxies to the agent + syncs). */
+export function selectPropOption(id: string, optionId: string, why: string): Promise<any> {
+  return postJson<any>(`/props/${encodeURIComponent(id)}/selection`, {
+    chosen_option_id: optionId,
+    chosen_by: 'Studio',
+    why: why || 'Selected in studio review',
+  });
+}
+
+/** Stage 3 — start final asset generation (turnarounds + build spec). */
+export function finalizeProp(id: string): Promise<any> {
+  return postJson<any>(`/props/${encodeURIComponent(id)}/finalize`, {});
+}
+
+/** Export the finished package to the asset library / DAM. */
+export function exportProp(id: string): Promise<any> {
+  return postJson<any>(`/props/${encodeURIComponent(id)}/export`, {});
+}

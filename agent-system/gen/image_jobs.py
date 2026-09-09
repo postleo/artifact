@@ -16,6 +16,30 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Global image-generation rate limiter.
+# Image models (esp. Nano Banana Pro) have a low PER-MINUTE quota. To avoid 429s
+# we serialize all image calls across the process and space them by a minimum
+# interval, so generation happens ~1-2 at a time rather than in a burst.
+# Tune with IMAGE_GEN_MIN_INTERVAL_SEC (default 30s ≈ 2 images/min).
+# ---------------------------------------------------------------------------
+_IMAGE_GEN_MIN_INTERVAL_SEC = float(os.environ.get("IMAGE_GEN_MIN_INTERVAL_SEC", "30"))
+_image_rate_lock = asyncio.Lock()
+_image_last_call = 0.0
+
+
+async def _image_rate_limit() -> None:
+    """Block until at least the min interval has elapsed since the last image call."""
+    global _image_last_call
+    async with _image_rate_lock:
+        import time
+        wait = _IMAGE_GEN_MIN_INTERVAL_SEC - (time.monotonic() - _image_last_call)
+        if wait > 0:
+            logger.info("Rate-limiting image generation: waiting %.1fs to stay under quota", wait)
+            await asyncio.sleep(wait)
+        _image_last_call = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
 # Abstract interface — keeps the image generation backend swappable
 # ---------------------------------------------------------------------------
 
@@ -149,9 +173,9 @@ class GCSImageJobRunner(ImageJobRunner):
             )
             asset_refs["turnaround"].append(ref)
 
-        # Keep the final-asset burst modest to stay within image quota (each call also
-        # retries with backoff on 429). Turnarounds are the essential sheet.
-        callout_prompts = ["mechanism detail", "surface markings"]
+        # Full detail-callout + variant set. The global rate limiter spaces every image
+        # call to stay under the per-minute quota, so we keep the complete asset package.
+        callout_prompts = ["mechanism detail", "surface markings", "wear and patina"]
         for cp in callout_prompts:
             ref = await self._generate_and_store(
                 model_id=NBPRO_MODEL,
@@ -163,7 +187,7 @@ class GCSImageJobRunner(ImageJobRunner):
             )
             asset_refs["detail_callouts"].append(ref)
 
-        for variant in ["hero"]:
+        for variant in ["hero", "stunt"]:
             ref = await self._generate_and_store(
                 model_id=NBPRO_MODEL,
                 prompt=f"{base_prompt}. Variant: {variant} version.",
@@ -217,11 +241,10 @@ class GCSImageJobRunner(ImageJobRunner):
         # Generate with retry + backoff on 429 / RESOURCE_EXHAUSTED. Final-asset jobs
         # fire several image calls in sequence, and image models can have a low
         # per-minute quota — so we back off and retry rather than fail the whole stage.
-        import asyncio
-
         result = None
         last_err: Exception | None = None
         for attempt in range(6):
+            await _image_rate_limit()  # space calls to stay under the per-minute quota
             try:
                 result = self._client.models.generate_content(
                     model=model_id,

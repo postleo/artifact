@@ -9,8 +9,9 @@ import { SelectionPage } from './components/pages/SelectionPage';
 import { DossierPage } from './components/pages/DossierPage';
 import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
+import { GenerationStatus } from './components/GenerationStatus';
 import { getPropArtwork } from './utils/propVisuals';
-import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp } from './services/studioApi';
+import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp, selectPropOption, finalizeProp, exportProp } from './services/studioApi';
 import { isAuthenticated } from './services/auth';
 import { LoginScreen } from './components/LoginScreen';
 import { Sparkles, Layers } from 'lucide-react';
@@ -193,6 +194,30 @@ export default function App() {
     }
   };
 
+  // Poll for Stage 3 final assets (turnarounds/callouts) after finalize is kicked off.
+  const pollFinalUntilReady = async (id: string) => {
+    const terminal = ['assets_ready', 'exported', 'failed', 'budget_exceeded'];
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await new Promise((r) => setTimeout(r, 6000));
+      let live: any = null;
+      try { live = await getProp(id); } catch { continue; }
+      if (!live) continue;
+      const fa = live.final_assets || {};
+      const hasFinal = Array.isArray(fa.turnarounds) && fa.turnarounds.length > 0;
+      const status = live.status as PropItem['status'] | undefined;
+      setPropsList((prev) => {
+        const next = prev.map((p) =>
+          p.id === id
+            ? ({ ...p, status: status || p.status, finalAssets: hasFinal ? fa : p.finalAssets } as PropItem)
+            : p
+        );
+        void saveStudioProps(next);
+        return next;
+      });
+      if (status && terminal.includes(status)) break;
+    }
+  };
+
   const handleSubmitBrief = async (newBriefData: Partial<PropItem>) => {
     // Kick off the REAL agent pipeline (backend -> agent -> Agent Engine -> Nano Banana).
     // Falls back to a local-only placeholder id if the backend is unreachable.
@@ -366,6 +391,11 @@ export default function App() {
       }
     };
 
+    if (liveCreated) {
+      // Don't show demo concept art while the real pipeline runs — the poller fills
+      // in the real options + images, and GenerationStatus communicates progress.
+      newProp.options = [];
+    }
     const updated = [newProp, ...propsList];
     setPropsList(updated);
     void saveStudioProps(updated);
@@ -413,22 +443,34 @@ export default function App() {
     setPropsList(updated);
     void saveStudioProps(updated);
     setCurrentTab('selection');
+    // Gate 2: record the selection with the real agent for live props.
+    if (activeProp.id.startsWith('prop_')) {
+      void selectPropOption(activeProp.id, optionId, notes).catch((e) =>
+        console.error('selection sync failed', e)
+      );
+    }
   };
 
   const handleBuildFinalAssets = () => {
     if (!activeProp) return;
+    const isLive = activeProp.id.startsWith('prop_');
     const updated = propsList.map((p) => {
       if (p.id === activeProp.id) {
-        return {
-          ...p,
-          status: 'assets_ready' as const
-        };
+        // Live props: mark generating and let the agent produce real final assets
+        // (polled in). Demo props: keep the instant local assets.
+        return { ...p, status: (isLive ? 'generating' : 'assets_ready') as PropItem['status'] };
       }
       return p;
     });
     setPropsList(updated);
     void saveStudioProps(updated);
     setCurrentTab('dossier');
+    if (isLive) {
+      const id = activeProp.id;
+      void finalizeProp(id)
+        .then(() => pollFinalUntilReady(id))
+        .catch((e) => console.error('finalize failed', e));
+    }
   };
 
   const handleExportPackage = () => {
@@ -447,6 +489,10 @@ export default function App() {
     });
     setPropsList(updated);
     void saveStudioProps(updated);
+    // Push to the asset library / DAM via the agent for live props.
+    if (activeProp.id.startsWith('prop_')) {
+      void exportProp(activeProp.id).catch((e) => console.error('export failed', e));
+    }
   };
 
   // Render empty prop notice if navigating to prop-specific views with 0 props
@@ -512,6 +558,7 @@ export default function App() {
 
       {/* Main Content View Container */}
       <main className="flex-1 pb-16">
+        <GenerationStatus prop={activeProp} />
         {currentTab === 'catalogue' && (
           <CataloguePage
             propsList={propsList}

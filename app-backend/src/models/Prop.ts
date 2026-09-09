@@ -43,7 +43,11 @@ export class Prop {
 
   static async create(data: Partial<PropAttributes> & { id: string }) {
     const record = { ...DEFAULTS, ...data } as PropAttributes;
-    await col.doc(data.id).set(record);
+    // Use merge so this write never clobbers fields written concurrently by the
+    // Kafka prop-event consumer (e.g. agent_status / last_event_revision). Kafka
+    // events can create the doc before the REST create path finishes awaiting the
+    // agent's response; a non-merge set() would wipe the consumer's fields.
+    await col.doc(data.id).set(record, { merge: true });
     return wrapDoc(col.doc(data.id), record);
   }
 }

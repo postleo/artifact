@@ -46,3 +46,50 @@ export function getStudioProps(): Promise<PropItem[]> {
 export function saveStudioProps(list: PropItem[]): Promise<void> {
   return putJson('/studio/props', list);
 }
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error(`POST ${path} unauthorized`);
+  }
+  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+  return (await res.json()) as T;
+}
+
+export interface CreatePropInput {
+  name: string;
+  shortDescription?: string;
+  world?: string;
+  era?: string;
+  functionOnScreen?: string;
+  constraints?: string;
+  optionsCount?: number;
+}
+
+/**
+ * Create a prop via the REAL agent pipeline (backend proxies to the agent-system,
+ * which drives Agent Engine + Nano Banana image generation). Returns the created
+ * record (status 'generating'); poll getProp(id) for progress + generated options.
+ */
+export function createProp(input: CreatePropInput): Promise<PropItem> {
+  return postJson<PropItem>('/props', {
+    name: input.name,
+    description: input.shortDescription ?? '',
+    shortDescription: input.shortDescription ?? '',
+    world: input.world ?? '',
+    era: input.era ?? '',
+    functionOnScreen: input.functionOnScreen ?? '',
+    constraints: input.constraints ?? '',
+    n_options: input.optionsCount ?? 3,
+  });
+}
+
+/** Fetch a single prop (backend refreshes it from the agent on read). */
+export function getProp(id: string): Promise<PropItem> {
+  return getJson<PropItem>(`/props/${encodeURIComponent(id)}`);
+}

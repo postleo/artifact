@@ -10,7 +10,7 @@ import { DossierPage } from './components/pages/DossierPage';
 import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
 import { getPropArtwork } from './utils/propVisuals';
-import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps } from './services/studioApi';
+import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp } from './services/studioApi';
 import { isAuthenticated } from './services/auth';
 import { LoginScreen } from './components/LoginScreen';
 import { Sparkles, Layers } from 'lucide-react';
@@ -152,13 +152,73 @@ export default function App() {
     setCurrentTab('catalogue');
   };
 
-  const handleSubmitBrief = (newBriefData: Partial<PropItem>) => {
-    const nextIndex = propsList.length + 124;
-    const newId = `ARF-00${nextIndex}`;
+  // Poll the backend for the REAL agent-generated options + images and merge them
+  // into the prop as they arrive (the backend refreshes from the agent on read).
+  const pollPropUntilReady = async (id: string) => {
+    const terminal = ['assets_ready', 'exported', 'failed', 'budget_exceeded'];
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      let live: any = null;
+      try {
+        live = await getProp(id);
+      } catch {
+        continue;
+      }
+      if (!live) continue;
+      const hasOptions =
+        Array.isArray(live.options) && live.options.length > 0 && !!live.options[0]?.imageUrl;
+      const firstImg: string = hasOptions ? live.options[0].imageUrl : '';
+      // The agent returns placeholder (unsplash) URLs until the real images land.
+      const hasRealImg = !!firstImg && !firstImg.startsWith('https://images.unsplash');
+      const status = live.status as PropItem['status'] | undefined;
+      setPropsList((prev) => {
+        const next = prev.map((p) => {
+          if (p.id !== id) return p;
+          return {
+            ...p,
+            status: status || p.status,
+            options: hasOptions ? live.options : p.options,
+            thumbnailUrl: hasRealImg ? live.options[0].imageUrl : p.thumbnailUrl,
+            finalAssets:
+              live.final_assets && live.final_assets.turnarounds?.length
+                ? live.final_assets
+                : p.finalAssets,
+            costEstUsd: live.cost?.est_usd ? Math.round(live.cost.est_usd) : p.costEstUsd,
+          } as PropItem;
+        });
+        void saveStudioProps(next);
+        return next;
+      });
+      if (hasRealImg || (status && terminal.includes(status))) break;
+    }
+  };
+
+  const handleSubmitBrief = async (newBriefData: Partial<PropItem>) => {
+    // Kick off the REAL agent pipeline (backend -> agent -> Agent Engine -> Nano Banana).
+    // Falls back to a local-only placeholder id if the backend is unreachable.
+    let newId = `ARF-00${propsList.length + 124}`;
+    let liveCreated = false;
+    try {
+      const created: any = await createProp({
+        name: newBriefData.name || 'Untitled Hero Prop',
+        shortDescription: newBriefData.shortDescription,
+        world: newBriefData.world,
+        era: newBriefData.era,
+        functionOnScreen: newBriefData.functionOnScreen,
+        constraints: newBriefData.constraints,
+        optionsCount: newBriefData.optionsCount,
+      });
+      if (created && created.id) {
+        newId = created.id;
+        liveCreated = true;
+      }
+    } catch (e) {
+      console.error('Live prop creation failed; showing local placeholder only:', e);
+    }
     const newProp: PropItem = {
       id: newId,
       name: newBriefData.name || 'Untitled Hero Prop',
-      status: 'awaiting_review',
+      status: liveCreated ? 'generating' : 'awaiting_review',
       shortDescription: newBriefData.shortDescription || '',
       world: newBriefData.world || productionProfile.projectName || 'Aetheria',
       era: newBriefData.era || productionProfile.worldLore || 'The Gilded Age of Drift',
@@ -311,6 +371,11 @@ export default function App() {
     void saveStudioProps(updated);
     setActivePropId(newId);
     setCurrentTab('options');
+
+    // When the real agent pipeline is running, poll for generated options + images.
+    if (liveCreated) {
+      void pollPropUntilReady(newId);
+    }
   };
 
   const handleUpdateProp = (updatedProp: PropItem) => {

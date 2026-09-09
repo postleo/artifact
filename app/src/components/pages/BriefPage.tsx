@@ -333,8 +333,7 @@ export function BriefPage({ onCancel, onSubmitBrief }: BriefPageProps) {
       ]
     };
 
-    setTimeout(() => {
-      setIsGenerating(false);
+    void Promise.resolve(
       onSubmitBrief({
         name: propName,
         shortDescription: shortDesc,
@@ -350,8 +349,8 @@ export function BriefPage({ onCancel, onSubmitBrief }: BriefPageProps) {
         versions: initialVersions,
         sceneUsageTimeline: initialSceneUsage,
         franchiseContinuity: initialFranchiseBible
-      });
-    }, 900);
+      })
+    ).finally(() => setIsGenerating(false));
   };
 
   return (

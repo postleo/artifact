@@ -22,7 +22,7 @@ AGENT_ENGINE_ID="${AGENT_ENGINE_ID:-}"   # optional: reasoning engine id or full
 RUN_SERVICES=(artifact-frontend artifact-backend artifact-agent)
 SQL_INSTANCE="artifact-sql"
 BUCKETS=("gs://${PROJECT}-artifact-assets" "gs://${PROJECT}-artifact-staging")
-SECRET="artifact-login-password"
+SECRETS=(artifact-login-password artifact-jwt-secret artifact-db-password artifact-agent-token)
 AR_REPO="cloud-run-source-deploy"
 
 if [[ "${1:-}" != "--yes" ]]; then
@@ -31,7 +31,7 @@ This will PERMANENTLY DELETE the following in project '${PROJECT}' (region ${REG
   - Cloud Run services : ${RUN_SERVICES[*]}
   - Cloud SQL instance : ${SQL_INSTANCE}
   - GCS buckets        : ${BUCKETS[*]}
-  - Secret Manager     : ${SECRET}
+  - Secret Manager     : ${SECRETS[*]}
   - Agent Engine       : ${AGENT_ENGINE_ID:-<auto-detect all reasoningEngines>}
   - Artifact Registry  : ${AR_REPO}   (only with --include-registry)
 
@@ -73,9 +73,11 @@ for b in "${BUCKETS[@]}"; do
     && echo "  deleted $b" || echo "  (skip $b - not found)"
 done
 
-echo "== Deleting Secret Manager secret =="
-gcloud secrets delete "$SECRET" --quiet 2>/dev/null \
-  && echo "  deleted $SECRET" || echo "  (skip $SECRET - not found)"
+echo "== Deleting Secret Manager secrets =="
+for s in "${SECRETS[@]}"; do
+  gcloud secrets delete "$s" --quiet 2>/dev/null \
+    && echo "  deleted $s" || echo "  (skip $s - not found)"
+done
 
 if [[ "${2:-}" == "--include-registry" ]]; then
   echo "== Deleting Artifact Registry repo =="

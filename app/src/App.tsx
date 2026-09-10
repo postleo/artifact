@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ActiveTab, PropItem, ProductionProfile, PropViewMode } from './types';
+import { ActiveTab, PropItem, ProductionProfile, PropViewMode, HistoryLogEntry } from './types';
 import { INITIAL_PROPS } from './data/propsData';
 import { Header } from './components/Header';
 import { CataloguePage } from './components/pages/CataloguePage';
@@ -9,12 +9,45 @@ import { SelectionPage } from './components/pages/SelectionPage';
 import { DossierPage } from './components/pages/DossierPage';
 import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
-import { GenerationStatus } from './components/GenerationStatus';
-import { getPropArtwork } from './utils/propVisuals';
+import { PipelineProgress } from './components/PipelineProgress';
 import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp, selectPropOption, finalizeProp, exportProp } from './services/studioApi';
 import { isAuthenticated } from './services/auth';
 import { LoginScreen } from './components/LoginScreen';
 import { Sparkles, Layers } from 'lucide-react';
+
+// The sample archive, tagged as demo so the UI keeps its rich showcase content
+// while never letting it bleed into real, live-generated props.
+const DEMO_PROPS: PropItem[] = INITIAL_PROPS.map((p) => ({ ...p, source: 'demo' as const }));
+
+// A prop is "live" when it was created through the real generation pipeline.
+// New live props carry source: 'live'; for older persisted records that predate
+// the flag we fall back to the agent's id shape (prop_<hex>). Demo is explicit.
+function isLiveProp(p: { id: string; source?: string } | null | undefined): boolean {
+  if (!p) return false;
+  if (p.source === 'live') return true;
+  if (p.source === 'demo') return false;
+  return p.id.startsWith('prop_');
+}
+
+// Real option images are hosted (GCS signed URLs / agent output); the unsplash
+// domain is only ever used as a placeholder fallback, so it means "not real yet".
+function hasRealOptionImages(prop: PropItem): boolean {
+  return (prop.options || []).some(
+    (o) => !!o.imageUrl && !o.imageUrl.startsWith('https://images.unsplash')
+  );
+}
+
+// Honest, plain-language message for a terminal/blocked pipeline status.
+// Returns undefined for healthy statuses so any prior error is cleared.
+function pipelineErrorFor(status: string | undefined): string | undefined {
+  if (status === 'failed') {
+    return 'Generation hit an error — most often the image-generation quota. It retries automatically; if it keeps failing, try again shortly.';
+  }
+  if (status === 'budget_exceeded') {
+    return 'This prop reached its budget ceiling — approval is needed before it can keep generating.';
+  }
+  return undefined;
+}
 
 export default function App() {
   // Production profile — loaded from the backend DB on mount (see effect below).
@@ -139,16 +172,16 @@ export default function App() {
       void saveStudioProps([]);
       setCurrentTab('catalogue');
     } else {
-      setPropsList(INITIAL_PROPS);
-      void saveStudioProps(INITIAL_PROPS);
+      setPropsList(DEMO_PROPS);
+      void saveStudioProps(DEMO_PROPS);
       setActivePropId('ARF-00123');
       setCurrentTab('catalogue');
     }
   };
 
   const handleResetToDemo = () => {
-    setPropsList(INITIAL_PROPS);
-    void saveStudioProps(INITIAL_PROPS);
+    setPropsList(DEMO_PROPS);
+    void saveStudioProps(DEMO_PROPS);
     setActivePropId('ARF-00123');
     setCurrentTab('catalogue');
   };
@@ -172,19 +205,23 @@ export default function App() {
       // The agent returns placeholder (unsplash) URLs until the real images land.
       const hasRealImg = !!firstImg && !firstImg.startsWith('https://images.unsplash');
       const status = live.status as PropItem['status'] | undefined;
+      const errText = pipelineErrorFor(status);
       setPropsList((prev) => {
         const next = prev.map((p) => {
           if (p.id !== id) return p;
           return {
             ...p,
             status: status || p.status,
-            options: hasOptions ? live.options : p.options,
+            // Only ever adopt REAL options (with real images); never let the
+            // agent's placeholder art land on a live prop.
+            options: hasRealImg ? live.options : p.options,
             thumbnailUrl: hasRealImg ? live.options[0].imageUrl : p.thumbnailUrl,
             finalAssets:
               live.final_assets && live.final_assets.turnarounds?.length
                 ? live.final_assets
                 : p.finalAssets,
             costEstUsd: live.cost?.est_usd ? Math.round(live.cost.est_usd) : p.costEstUsd,
+            pipelineError: errText,
           } as PropItem;
         });
         void saveStudioProps(next);
@@ -205,10 +242,17 @@ export default function App() {
       const fa = live.final_assets || {};
       const hasFinal = Array.isArray(fa.turnarounds) && fa.turnarounds.length > 0;
       const status = live.status as PropItem['status'] | undefined;
+      const errText = pipelineErrorFor(status);
       setPropsList((prev) => {
         const next = prev.map((p) =>
           p.id === id
-            ? ({ ...p, status: status || p.status, finalAssets: hasFinal ? fa : p.finalAssets } as PropItem)
+            ? ({
+                ...p,
+                status: status || p.status,
+                finalAssets: hasFinal ? fa : p.finalAssets,
+                costEstUsd: live.cost?.est_usd ? Math.round(live.cost.est_usd) : p.costEstUsd,
+                pipelineError: errText,
+              } as PropItem)
             : p
         );
         void saveStudioProps(next);
@@ -220,9 +264,13 @@ export default function App() {
 
   const handleSubmitBrief = async (newBriefData: Partial<PropItem>) => {
     // Kick off the REAL agent pipeline (backend -> agent -> Agent Engine -> Nano Banana).
-    // Falls back to a local-only placeholder id if the backend is unreachable.
-    let newId = `ARF-00${propsList.length + 124}`;
+    // A live prop starts EMPTY: no demo options, decision, assets, or history are
+    // fabricated. The poller fills in real options + images as the agent produces
+    // them, and PipelineProgress communicates 0-100% progress. If creation cannot
+    // reach the pipeline, we record an honest failed prop instead of faking one.
+    let newId = `ARF-LOCAL-${Date.now()}`;
     let liveCreated = false;
+    let createError = '';
     try {
       const created: any = await createProp({
         name: newBriefData.name || 'Untitled Hero Prop',
@@ -236,171 +284,73 @@ export default function App() {
       if (created && created.id) {
         newId = created.id;
         liveCreated = true;
+      } else {
+        createError = 'The generation service did not return a prop id.';
       }
     } catch (e) {
-      console.error('Live prop creation failed; showing local placeholder only:', e);
+      console.error('Live prop creation failed:', e);
+      createError = 'Could not reach the generation service to start this prop.';
     }
+
+    const stamp = `${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const leadName = productionProfile.leadName || 'Studio';
+    const leadRole = productionProfile.departmentRole || 'Prop Master';
+
+    const history: HistoryLogEntry[] = [
+      {
+        id: `hist-${Date.now()}-1`,
+        timestamp: stamp,
+        action: newBriefData.scriptExcerpt
+          ? 'Hero Prop Brief Extracted from Production Script'
+          : 'Hero Prop Brief Submitted',
+        user: leadName,
+        role: leadRole,
+        notes: `Brief submitted for ${newBriefData.name || 'the hero prop'}.`,
+        type: 'creation',
+      },
+    ];
+    if (liveCreated) {
+      history.push({
+        id: `hist-${Date.now()}-2`,
+        timestamp: stamp,
+        action: 'Concept Option Generation Started',
+        user: 'Artifact Agent',
+        role: 'Generation Pipeline',
+        notes: `Requested ${newBriefData.optionsCount || 3} divergent concept directions.`,
+        type: 'generation',
+      });
+    }
+
     const newProp: PropItem = {
       id: newId,
       name: newBriefData.name || 'Untitled Hero Prop',
-      status: liveCreated ? 'generating' : 'awaiting_review',
+      source: 'live',
+      status: liveCreated ? 'generating' : 'failed',
+      pipelineError: liveCreated ? undefined : (createError || 'Prop creation failed.'),
       shortDescription: newBriefData.shortDescription || '',
-      world: newBriefData.world || productionProfile.projectName || 'Aetheria',
-      era: newBriefData.era || productionProfile.worldLore || 'The Gilded Age of Drift',
+      world: newBriefData.world || productionProfile.projectName || '',
+      era: newBriefData.era || productionProfile.worldLore || '',
       functionOnScreen: newBriefData.functionOnScreen || '',
       constraints: newBriefData.constraints || '',
-      optionsCount: newBriefData.optionsCount || 4,
-      thumbnailUrl: getPropArtwork('astral_compass_opt_a'),
-      costEstUsd: 1250,
-      timeEstDays: 5,
+      optionsCount: newBriefData.optionsCount || 3,
+      thumbnailUrl: '',
+      costEstUsd: 0,
+      timeEstDays: 0,
       referenceImages: newBriefData.referenceImages || [],
-      options: [
-        {
-          id: 'A',
-          code: `${newId}-OPT-A`,
-          title: 'Primary Gilded Archetype',
-          rationale: `Optimal balance of silhouette and ergonomic handling for ${newBriefData.name || 'this prop'}.`,
-          imageUrl: getPropArtwork('astral_compass_opt_a'),
-          silhouette: 'Clean geometric lines with clear key lighting reflection.',
-          highlights: ['Reinforced chassis', 'Screen-accurate scale', 'Balanced weight']
-        },
-        {
-          id: 'B',
-          code: `${newId}-OPT-B`,
-          title: 'Streamlined Aerodynamic Profile',
-          rationale: 'Reduced ornamentation emphasizing practical field reliability and rapid on-camera access.',
-          imageUrl: getPropArtwork('astral_compass_opt_b'),
-          silhouette: 'Slender profile with minimal external snag hazards.',
-          highlights: ['Sleek profile', 'High-contrast accents', 'Quick deploy']
-        },
-        {
-          id: 'C',
-          code: `${newId}-OPT-C`,
-          title: 'Encased Heavy Duty Chassis',
-          rationale: 'Reinforced industrial variant with sealed mechanisms and ruggedized hinges.',
-          imageUrl: getPropArtwork('astral_compass_opt_c'),
-          silhouette: 'Substantial cylindrical volume.',
-          highlights: ['Knurled grips', 'Sealed seams', 'Shock-resistant housing']
-        },
-        {
-          id: 'D',
-          code: `${newId}-OPT-D`,
-          title: 'Architectural Display Standard',
-          rationale: 'Stationary hero configuration featuring decorative pedestal and intricate gearwork.',
-          imageUrl: getPropArtwork('astral_compass_opt_d'),
-          silhouette: 'Prominent tabletop silhouette.',
-          highlights: ['Exposed brass gearing', 'Ornate base', 'High-relief crest']
-        }
-      ],
-      selectedOptionId: 'A',
-      decision: {
-        optionId: 'A',
-        whyWeChoseThis: `Option A for ${newBriefData.name} fulfills all practical on-set needs while staying faithful to the ${newBriefData.world || productionProfile.projectName} world-building.`,
-        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        approvers: [
-          {
-            name: productionProfile.leadName || 'Isla Venn',
-            role: productionProfile.departmentRole || 'Art Director',
-            avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'
-          },
-          {
-            name: 'Rohan Patel',
-            role: 'Creative Director',
-            avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80'
-          },
-          {
-            name: 'Mira Solis',
-            role: 'Production Designer',
-            avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80'
-          }
-        ],
-        notes: [
-          `Approved by lead art department team for ${newBriefData.world || productionProfile.projectName}.`,
-          'Meets dimensional constraints (<20cm closed).',
-          'Stunt-safe version to be cast in flexible urethane with safety-blunted edges.'
-        ]
-      },
-      finalAssets: {
-        createdDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        updatedDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        author: productionProfile.leadName || 'Isla Venn',
-        turnarounds: [
-          { angle: 'FRONT', imageUrl: getPropArtwork('astral_compass_front'), dimensionsNote: 'Front Elevation' },
-          { angle: 'SIDE', imageUrl: getPropArtwork('astral_compass_side'), dimensionsNote: 'Profile' },
-          { angle: 'BACK', imageUrl: getPropArtwork('astral_compass_back'), dimensionsNote: 'Rear Aspect' },
-          { angle: 'THREE-QUARTER', imageUrl: getPropArtwork('astral_compass_three_quarter'), dimensionsNote: 'Perspective 3/4' }
-        ],
-        callouts: [
-          { id: 'c1', title: 'Main Dial', subtitle: 'Engraved markers', imageUrl: getPropArtwork('callout_dial') },
-          { id: 'c2', title: 'Rotational Pivot', subtitle: 'Ball bearing detent', imageUrl: getPropArtwork('callout_ring') },
-          { id: 'c3', title: 'Alignment Latch', subtitle: 'Magnetic catch', imageUrl: getPropArtwork('callout_indicator') },
-          { id: 'c4', title: 'Hinge Hardware', subtitle: 'Cold-forged brass', imageUrl: getPropArtwork('callout_hinge') },
-          { id: 'c5', title: 'Maker Inscription', subtitle: 'Owner sigil', imageUrl: getPropArtwork('callout_base') },
-          { id: 'c6', title: 'Stowage Profile', subtitle: 'Compacted form', imageUrl: getPropArtwork('callout_compact') }
-        ],
-        specTable: {
-          dimensionsClosed: 'Ø 15.0 cm × H 6.0 cm',
-          dimensionsOpen: 'Ø 20.0 cm × H 18.0 cm',
-          weight: '1.20 kg',
-          materials: 'Brass, Sapphire Glass, Leather',
-          finishes: 'Antiqued Satin, Hand-buffed',
-          stuntVariant: `${newId}-SV (Urethane safety duplicate)`,
-          scriptedStates: 'Closed, Deployed, Active',
-          mechanism: 'Dual-axis gimbal, magnetic detent',
-          caregivingNotes: 'Store in dry velvet-lined case. Polish with microfiber.'
-        },
-        exportStatus: 'Ready to export',
-        libraryDestination: `/Library/Props/${newId}_${newBriefData.name?.replace(/\s+/g, '_')}`,
-        budgetCode: 'PRP-WEBG-002',
-        budgetStatus: 'ON BUDGET'
-      },
-      sceneNumber: newBriefData.sceneNumber || 'SCENE 14',
+      options: [],
+      selectionSynced: false,
+      sceneNumber: newBriefData.sceneNumber,
       scriptExcerpt: newBriefData.scriptExcerpt,
-      history: [
-        {
-          id: `hist-${Date.now()}-1`,
-          timestamp: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' · ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          action: newBriefData.scriptExcerpt ? 'Hero Prop Brief Extracted from Production Script' : 'Hero Prop Brief Initialized',
-          user: productionProfile.leadName || 'Isla Venn',
-          role: productionProfile.departmentRole || 'Lead Prop Master',
-          notes: `Parameters established for ${newBriefData.name}. Dimensional constraints & stunt requirements parsed.`,
-          type: 'creation'
-        },
-        {
-          id: `hist-${Date.now()}-2`,
-          timestamp: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' · ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          action: 'Concept Options Synthesized (4 Candidates)',
-          user: 'Artifact Studio Engine',
-          role: 'System Agent',
-          notes: 'Divergent silhouettes generated with color-calibrated vitrine plates.',
-          type: 'generation'
-        }
-      ],
-      exportMetadata: {
-        slateCode: `PRP-${newId.replace('ARF-', '')}-HRO-${newBriefData.sceneNumber?.replace(/\s+/g, '') || 'SC14'}-V1`,
-        sceneCues: `${newBriefData.sceneNumber || 'SCENE 14'} · SLATE 01 · ROLL A`,
-        rollTake: 'ROLL 01 / TAKE 01',
-        cameraLens: 'Cooke Anamorphic /i 50mm T2.3',
-        colorSpace: 'ACEScg (Linear AP1)',
-        aspectRatio: '2.39:1 Anamorphic Scope',
-        lutTarget: 'KODAK_5219_PRINT_FILM_D55',
-        checksum: `sha256:${Math.random().toString(36).substring(2, 10)}...${Math.random().toString(36).substring(2, 6)}`,
-        version: 'v1.0-DRAFT',
-        stuntDurometer: 'Shore 45A Soft Urethane Duplicate',
-        damDestination: `/Library/Props/${newId}_${newBriefData.name?.replace(/\s+/g, '_')}`
-      }
+      history,
     };
 
-    if (liveCreated) {
-      // Don't show demo concept art while the real pipeline runs — the poller fills
-      // in the real options + images, and GenerationStatus communicates progress.
-      newProp.options = [];
-    }
     const updated = [newProp, ...propsList];
     setPropsList(updated);
     void saveStudioProps(updated);
     setActivePropId(newId);
-    setCurrentTab('options');
+    // On success, go to the proof sheet (which shows the generating state);
+    // on failure, return to the catalogue where the failed card is visible.
+    setCurrentTab(liveCreated ? 'options' : 'catalogue');
 
     // When the real agent pipeline is running, poll for generated options + images.
     if (liveCreated) {
@@ -416,65 +366,107 @@ export default function App() {
 
   const handleSelectOptionInProofSheet = (optionId: string, notes: string) => {
     if (!activeProp) return;
+    const live = isLiveProp(activeProp);
+    const chosen = activeProp.options.find((o) => o.id === optionId);
     const updated = propsList.map((p) => {
-      if (p.id === activeProp.id) {
-        return {
-          ...p,
-          selectedOptionId: optionId,
-          status: 'awaiting_review' as const,
-          decision: {
-            ...(p.decision || {
-              optionId,
-              whyWeChoseThis: '',
-              date: 'May 14, 2024',
-              approvers: [],
-              notes: []
-            }),
-            optionId,
-            whyWeChoseThis:
-              notes ||
-              p.options.find((o) => o.id === optionId)?.rationale ||
-              'Option best balances readability and visual sophistication.'
-          }
-        };
-      }
-      return p;
+      if (p.id !== activeProp.id) return p;
+      return {
+        ...p,
+        selectedOptionId: optionId,
+        status: 'awaiting_review' as const,
+        // For live props the selection isn't confirmed with the agent until the
+        // request below succeeds; the Build button stays disabled until then.
+        selectionSynced: live ? false : true,
+        pipelineError: undefined,
+        decision: {
+          optionId,
+          whyWeChoseThis:
+            notes ||
+            chosen?.rationale ||
+            'Selected as the strongest direction for this hero prop.',
+          date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          // Live props record the real person who made the call — no fabricated
+          // approval panel. Demo props keep their showcase approver list.
+          approvers: live
+            ? [{ name: productionProfile.leadName || 'Studio', role: productionProfile.departmentRole || 'Prop Master', avatar: '' }]
+            : (p.decision?.approvers || []),
+          notes: notes ? [notes] : (live ? [] : (p.decision?.notes || [])),
+        },
+      } as PropItem;
     });
     setPropsList(updated);
     void saveStudioProps(updated);
     setCurrentTab('selection');
-    // Gate 2: record the selection with the real agent for live props.
-    if (activeProp.id.startsWith('prop_')) {
-      void selectPropOption(activeProp.id, optionId, notes).catch((e) =>
-        console.error('selection sync failed', e)
-      );
+    // Gate 2: record the selection with the real agent for live props, then flip
+    // selectionSynced so final-asset generation can be started.
+    if (live) {
+      const id = activeProp.id;
+      selectPropOption(id, optionId, notes)
+        .then(() => {
+          setPropsList((prev) => {
+            const next = prev.map((p) =>
+              p.id === id ? ({ ...p, selectionSynced: true, pipelineError: undefined } as PropItem) : p
+            );
+            void saveStudioProps(next);
+            return next;
+          });
+        })
+        .catch((e) => {
+          console.error('selection sync failed', e);
+          setPropsList((prev) => {
+            const next = prev.map((p) =>
+              p.id === id
+                ? ({ ...p, selectionSynced: false, pipelineError: 'Could not record your selection with the generation service. Please try again.' } as PropItem)
+                : p
+            );
+            void saveStudioProps(next);
+            return next;
+          });
+        });
     }
   };
 
   const handleBuildFinalAssets = () => {
     if (!activeProp) return;
-    const isLive = activeProp.id.startsWith('prop_');
+    const live = isLiveProp(activeProp);
     const updated = propsList.map((p) => {
-      if (p.id === activeProp.id) {
-        // Live props: mark generating and let the agent produce real final assets
-        // (polled in). Demo props: keep the instant local assets.
-        return { ...p, status: (isLive ? 'generating' : 'assets_ready') as PropItem['status'] };
-      }
-      return p;
+      if (p.id !== activeProp.id) return p;
+      // Live props: mark generating and let the agent produce real final assets
+      // (polled in). Demo props: keep the instant local showcase assets.
+      return {
+        ...p,
+        status: (live ? 'generating' : 'assets_ready') as PropItem['status'],
+        pipelineError: undefined,
+      } as PropItem;
     });
     setPropsList(updated);
     void saveStudioProps(updated);
     setCurrentTab('dossier');
-    if (isLive) {
+    if (live) {
       const id = activeProp.id;
-      void finalizeProp(id)
+      finalizeProp(id)
         .then(() => pollFinalUntilReady(id))
-        .catch((e) => console.error('finalize failed', e));
+        .catch((e) => {
+          console.error('finalize failed', e);
+          // Surface an honest error and return to selection so the user can retry
+          // (the most common cause is the selection not being confirmed yet).
+          setPropsList((prev) => {
+            const next = prev.map((p) =>
+              p.id === id
+                ? ({ ...p, status: 'awaiting_review' as PropItem['status'], pipelineError: 'Could not start final asset generation. Make sure your selection was recorded, then try again.' } as PropItem)
+                : p
+            );
+            void saveStudioProps(next);
+            return next;
+          });
+          setCurrentTab('selection');
+        });
     }
   };
 
   const handleExportPackage = () => {
     if (!activeProp) return;
+    const live = isLiveProp(activeProp);
     const updated = propsList.map((p) => {
       if (p.id === activeProp.id) {
         return {
@@ -490,7 +482,7 @@ export default function App() {
     setPropsList(updated);
     void saveStudioProps(updated);
     // Push to the asset library / DAM via the agent for live props.
-    if (activeProp.id.startsWith('prop_')) {
+    if (live) {
       void exportProp(activeProp.id).catch((e) => console.error('export failed', e));
     }
   };
@@ -558,7 +550,7 @@ export default function App() {
 
       {/* Main Content View Container */}
       <main className="flex-1 pb-16">
-        <GenerationStatus prop={activeProp} />
+        <PipelineProgress prop={activeProp} />
         {currentTab === 'catalogue' && (
           <CataloguePage
             propsList={propsList}

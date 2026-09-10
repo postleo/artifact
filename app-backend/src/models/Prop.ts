@@ -50,4 +50,8 @@ export class Prop {
     await col.doc(data.id).set(record, { merge: true });
     return wrapDoc(col.doc(data.id), record);
   }
+
+  static async destroy(id: string) {
+    await col.doc(id).delete();
+  }
 }

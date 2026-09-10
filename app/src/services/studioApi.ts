@@ -94,6 +94,28 @@ export function getProp(id: string): Promise<PropItem> {
   return getJson<PropItem>(`/props/${encodeURIComponent(id)}`);
 }
 
+/**
+ * Fetch ALL live props from the backend mirror (the authoritative record of every
+ * prop created through the pipeline). The studio catalogue merges these on load so
+ * generations always appear, independent of the browser-side slate.
+ */
+export function getLiveProps(): Promise<any[]> {
+  return getJson<any[]>('/props');
+}
+
+/** Delete a live prop from the backend mirror so the removal persists. */
+export async function deleteLiveProp(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/props/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeader(),
+  });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error('DELETE /props unauthorized');
+  }
+  if (!res.ok) throw new Error(`DELETE /props/${id} failed: ${res.status}`);
+}
+
 /** Gate 2 — record the chosen option (backend proxies to the agent + syncs). */
 export function selectPropOption(id: string, optionId: string, why: string): Promise<any> {
   return postJson<any>(`/props/${encodeURIComponent(id)}/selection`, {

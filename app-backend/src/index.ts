@@ -26,7 +26,12 @@ const AGENT_SYSTEM_TOKEN = process.env.AGENT_SYSTEM_BEARER_TOKEN || '';
 const CORS_ORIGIN = process.env.APP_CORS_ORIGIN || 'http://localhost:3000';
 const corsOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((o) => o.trim());
 app.use(cors({ origin: corsOrigins }));
-app.use(express.json());
+// The studio slate (profile + full props catalogue with options/final assets and
+// signed URLs) is sent as a single JSON body and can be well over Express's default
+// 100kb limit — which previously caused saves to fail with 413 and new generations
+// to silently not persist. Allow a generous limit (still under Firestore's ~1MiB
+// per-document ceiling for the slate document).
+app.use(express.json({ limit: '5mb' }));
 
 // ---------------------------------------------------------------------------
 // Authentication: password login -> short-lived signed JWT.
@@ -147,6 +152,19 @@ app.get('/api/props/:id', async (req, res) => {
       return res.status(404).json({ error: `Prop ${id} not found` });
     }
     return res.json(prop);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a prop from the local mirror (removes it from the studio's catalogue).
+// The studio catalogue sources live props from this mirror, so deleting here is
+// what makes a removal stick across reloads.
+app.delete('/api/props/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Prop.destroy(id);
+    return res.json({ success: true, id });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }

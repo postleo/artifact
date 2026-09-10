@@ -10,7 +10,7 @@ import { DossierPage } from './components/pages/DossierPage';
 import { RegistryPage } from './components/pages/RegistryPage';
 import { OnboardingModal } from './components/OnboardingModal';
 import { PipelineProgress } from './components/PipelineProgress';
-import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp, selectPropOption, finalizeProp, exportProp } from './services/studioApi';
+import { getStudioProfile, saveStudioProfile, getStudioProps, saveStudioProps, createProp, getProp, getLiveProps, deleteLiveProp, selectPropOption, finalizeProp, exportProp } from './services/studioApi';
 import { isAuthenticated } from './services/auth';
 import { LoginScreen } from './components/LoginScreen';
 import { Sparkles, Layers } from 'lucide-react';
@@ -35,6 +35,41 @@ function hasRealOptionImages(prop: PropItem): boolean {
   return (prop.options || []).some(
     (o) => !!o.imageUrl && !o.imageUrl.startsWith('https://images.unsplash')
   );
+}
+
+// Map a backend mirror record (app_props / GET /api/props) into the PropItem shape
+// the studio UI uses. The backend already maps options/final_assets into the app
+// shape during sync; here we just normalise field names and derive display fields.
+function mapMirrorToPropItem(raw: any): PropItem {
+  const opts: any[] = Array.isArray(raw.options) ? raw.options : [];
+  const brief = raw.brief || {};
+  const selectedId: string | undefined = raw.selection?.chosen || raw.selectedOptionId;
+  const isReal = (o: any) => o?.imageUrl && !String(o.imageUrl).startsWith('https://images.unsplash');
+  const selOpt = selectedId ? opts.find((o) => o.id === selectedId) : undefined;
+  const thumb = isReal(selOpt) ? selOpt.imageUrl : (opts.find(isReal)?.imageUrl || '');
+  return {
+    id: raw.id,
+    name: raw.name || brief.what || 'Hero Prop',
+    source: 'live',
+    status: (raw.status || 'generating') as PropItem['status'],
+    shortDescription: raw.shortDescription || raw.description || '',
+    world: raw.world || '',
+    era: raw.era || brief.era || '',
+    functionOnScreen:
+      raw.functionOnScreen || (Array.isArray(brief.on_screen) ? brief.on_screen.join('; ') : ''),
+    constraints:
+      raw.constraints || (Array.isArray(brief.constraints) ? brief.constraints.join('; ') : ''),
+    optionsCount: opts.length || raw.optionsCount || 3,
+    thumbnailUrl: thumb,
+    referenceImages: [],
+    options: opts,
+    selectedOptionId: selectedId,
+    finalAssets: raw.finalAssets || raw.final_assets || undefined,
+    costEstUsd: raw.cost?.est_usd ? Math.round(raw.cost.est_usd) : 0,
+    timeEstDays: 0,
+    selectionSynced: !!(raw.selection || raw.selectedOptionId),
+    pipelineError: pipelineErrorFor(raw.status),
+  } as PropItem;
 }
 
 // Honest, plain-language message for a terminal/blocked pipeline status.
@@ -95,7 +130,15 @@ export default function App() {
     hydratedRef.current = false; // disable auto-save while (re)loading
     (async () => {
       try {
-        const [profile, props] = await Promise.all([getStudioProfile(), getStudioProps()]);
+        // Load the profile, the saved slate, and the authoritative live-prop mirror.
+        // Live props are sourced from the mirror (GET /api/props) so every generation
+        // created through the pipeline always appears — independent of the browser
+        // slate. The saved slate contributes demo props + ordering/UI-only records.
+        const [profile, slate, liveRaw] = await Promise.all([
+          getStudioProfile(),
+          getStudioProps().catch(() => [] as PropItem[]),
+          getLiveProps().catch(() => [] as any[]),
+        ]);
         if (cancelled) return;
         if (profile) {
           setProductionProfile(profile);
@@ -103,9 +146,22 @@ export default function App() {
           // First run — no profile persisted yet: prompt onboarding.
           setIsOnboardingOpen(true);
         }
-        if (props && props.length > 0) {
-          setPropsList(props);
-          setActivePropId(props[0].id);
+
+        const live: PropItem[] = (Array.isArray(liveRaw) ? liveRaw : []).map(mapMirrorToPropItem);
+        // Merge: keep the saved slate (demo props + any local records), then overlay
+        // the authoritative live props (added or refreshed). Dedupe by id, live wins.
+        const byId = new Map<string, PropItem>();
+        for (const p of Array.isArray(slate) ? slate : []) byId.set(p.id, p);
+        for (const p of live) byId.set(p.id, p);
+        const merged = Array.from(byId.values());
+        // Show live props first (newest work), demo/sample archive after.
+        merged.sort((a, b) => (a.source === 'demo' ? 1 : 0) - (b.source === 'demo' ? 1 : 0));
+
+        if (merged.length > 0) {
+          setPropsList(merged);
+          setActivePropId(merged[0].id);
+          // Reconcile the persisted slate so the recovered props are saved back too.
+          void saveStudioProps(merged);
         }
       } catch (e) {
         console.error('Failed to load studio state from backend:', e);
@@ -529,6 +585,11 @@ export default function App() {
     const remaining = propsList.filter((p) => p.id !== id);
     setPropsList(remaining);
     void saveStudioProps(remaining);
+    // Live props also live in the backend mirror (which the catalogue loads from),
+    // so delete them there too or they'd reappear on the next reload.
+    if (prop && isLiveProp(prop)) {
+      void deleteLiveProp(id).catch((e) => console.error('delete on backend failed', e));
+    }
     if (activePropId === id) {
       const next = remaining[0];
       setActivePropId(next ? next.id : '');

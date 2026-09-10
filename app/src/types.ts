@@ -1,4 +1,10 @@
-export type PropStatus = 'awaiting_review' | 'generating' | 'assets_ready' | 'exported';
+export type PropStatus =
+  | 'awaiting_review'
+  | 'generating'
+  | 'assets_ready'
+  | 'exported'
+  | 'failed'
+  | 'budget_exceeded';
 
 export interface ReferenceImage {
   id: string;
@@ -155,6 +161,17 @@ export interface PropItem {
   id: string; // e.g. "ARF-00123"
   name: string;
   status: PropStatus;
+  // Origin of the prop. 'live' = created through the real generation pipeline
+  // (agent-system); 'demo' = a sample archive record. Demo records keep their
+  // rich showcase content; live records only ever show real, agent-produced data
+  // (with honest loading/empty states while a stage is still generating).
+  source?: 'live' | 'demo';
+  // Transient, human-readable pipeline error surfaced in the UI (failed /
+  // budget / selection-sync problems). Cleared on the next successful progress.
+  pipelineError?: string;
+  // True once Gate 2 (option selection) has been confirmed with the agent, which
+  // is required before final-asset generation (finalize) can be started.
+  selectionSynced?: boolean;
   shortDescription: string;
   world: string;
   era: string;

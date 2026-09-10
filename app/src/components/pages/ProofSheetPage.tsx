@@ -33,6 +33,68 @@ export function ProofSheetPage({
   const [comparingPair, setComparingPair] = useState<[ConceptOption, ConceptOption] | null>(null);
   const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
 
+  const isDemo = prop.source === 'demo';
+  const hasRealOptions = prop.options.some(
+    (o) => o.imageUrl && !o.imageUrl.startsWith('https://images.unsplash')
+  );
+
+  // Live prop that is still generating its concept options (or hit an error):
+  // show honest loading placeholders / an error message instead of an empty or
+  // fabricated grid. Deliverables fill in here as soon as the real images land.
+  if (!isDemo && (prop.options.length === 0 || !hasRealOptions)) {
+    const failed = prop.status === 'failed' || prop.status === 'budget_exceeded';
+    const count = Math.max(1, Math.min(prop.optionsCount || 3, 6));
+    return (
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="border-b border-[#D8E5E1] dark:border-[#223735] pb-4 mb-6">
+          <div className="font-mono-tag text-xs text-[#12A79D] font-semibold tracking-widest uppercase mb-1">
+            GATE 1 · THE PROOF SHEET · {prop.id}
+          </div>
+          <h1 className="font-fraunces text-3xl font-bold text-[#12201F] dark:text-[#EDF5F3]">
+            Concept options
+          </h1>
+          <p className="font-inter text-sm text-[#48605E] dark:text-[#8BA4A1] mt-1">
+            {failed
+              ? 'Concept generation did not complete.'
+              : 'Generating divergent concept directions — images appear here as soon as they render.'}
+          </p>
+        </div>
+
+        {failed ? (
+          <div className="max-w-xl bg-amber-500/10 border border-amber-500/40 p-5">
+            <p className="font-inter text-sm text-amber-900 dark:text-amber-200 mb-4">
+              {prop.pipelineError || 'Generation hit an error. Please try again.'}
+            </p>
+            <button
+              type="button"
+              onClick={onRefineBrief}
+              className="bg-[#12A79D] hover:bg-[#0B5F5A] text-white px-5 py-2 text-xs font-mono-tag font-bold uppercase tracking-wider transition-colors cursor-pointer"
+            >
+              Refine brief &amp; retry
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 max-w-4xl">
+            {Array.from({ length: count }).map((_, i) => (
+              <div
+                key={i}
+                className="bg-white dark:bg-[#14201E] border border-[#D8E5E1] dark:border-[#223735] p-3"
+              >
+                <div className="h-[2px] w-full bg-[#12A79D]/30 mb-2" />
+                <div className="aspect-video w-full bg-[#F7F4EC] dark:bg-[#0E1716] animate-pulse flex items-center justify-center">
+                  <span className="font-mono-tag text-[10px] uppercase tracking-wider text-[#48605E]/70 dark:text-[#8BA4A1]/70">
+                    Option {String.fromCharCode(65 + i)} · rendering…
+                  </span>
+                </div>
+                <div className="mt-2 h-3 w-3/4 bg-[#F7F4EC] dark:bg-[#0E1716] animate-pulse" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const currentOption =
     prop.options.find((opt) => opt.id === selectedOptionId) || prop.options[0];
 

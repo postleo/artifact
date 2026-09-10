@@ -1,16 +1,17 @@
 import React from 'react';
 import { PropItem, PropViewMode } from '../types';
 import { StatusChip } from './StatusChip';
-import { Camera } from 'lucide-react';
+import { Camera, Trash2 } from 'lucide-react';
 
 interface CatalogueCardProps {
   key?: React.Key;
   prop: PropItem;
   onClick: () => void;
   viewMode?: PropViewMode;
+  onDelete?: () => void;
 }
 
-export function CatalogueCard({ prop, onClick, viewMode = 'vitrine' }: CatalogueCardProps) {
+export function CatalogueCard({ prop, onClick, viewMode = 'vitrine', onDelete }: CatalogueCardProps) {
   const isVitrine = viewMode === 'vitrine';
 
   return (
@@ -22,6 +23,20 @@ export function CatalogueCard({ prop, onClick, viewMode = 'vitrine' }: Catalogue
           : 'bg-[#F4EFE6]/60 dark:bg-[#0E1716] border border-[#D8E5E1] dark:border-[#1F302D] hover:border-[#12A79D] shadow-xs'
       }`}
     >
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="absolute top-2 right-2 z-20 w-7 h-7 flex items-center justify-center bg-white/90 dark:bg-[#0D1514]/90 border border-[#D8E5E1] dark:border-[#223735] text-[#48605E] dark:text-[#8BA4A1] opacity-0 group-hover:opacity-100 hover:text-red-600 hover:border-red-400 transition-all cursor-pointer"
+          title={`Delete ${prop.name}`}
+          aria-label={`Delete ${prop.name}`}
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
       {/* Plate / Photo Container */}
       <div
         className={`relative w-full aspect-[4/3] overflow-hidden flex items-center justify-center mb-3 border transition-colors ${

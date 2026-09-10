@@ -148,10 +148,37 @@ class GCSImageJobRunner(ImageJobRunner):
         chosen_opt = next(
             (o for o in prop.options if o.id == chosen_option_id), None
         )
+
+        # Load the SELECTED option's approved concept image and pass it into every
+        # final-asset generation call as an image-to-image reference, so the
+        # turnarounds / callouts / variants stay faithful to the concept the team
+        # actually approved at Gate 1 (rather than being re-imagined from text alone).
+        reference_image_bytes: bytes | None = None
+        if chosen_opt and getattr(chosen_opt, "image_refs", None):
+            try:
+                ref_blob = self._storage.bucket(GCS_BUCKET_NAME).blob(chosen_opt.image_refs[0])
+                reference_image_bytes = ref_blob.download_as_bytes()
+                logger.info(
+                    "Loaded selected option %s image as Stage 3 reference (%d bytes)",
+                    chosen_option_id, len(reference_image_bytes),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not load selected option image %r as reference "
+                    "(continuing text-only): %s",
+                    (chosen_opt.image_refs[0] if chosen_opt.image_refs else None), exc,
+                )
+
+        style_txt = chosen_opt.rationale if chosen_opt else ""
         base_prompt = (
-            f"High-fidelity prop design for a film: {prop.brief.what}. "
-            f"Style: {chosen_opt.rationale if chosen_opt else ''}"
+            f"High-fidelity prop design for a film: {prop.brief.what}. Style: {style_txt}."
         )
+        if reference_image_bytes:
+            base_prompt += (
+                " Use the attached approved concept image as the definitive visual"
+                " reference — keep the same silhouette, materials, colour, and key"
+                " design details; only change the camera angle / view as described."
+            )
 
         seed = int(hashlib.sha256(prop_id.encode()).hexdigest(), 16) % (2 ** 31)  # deterministic seed for consistency
 
@@ -170,6 +197,7 @@ class GCSImageJobRunner(ImageJobRunner):
                 prop_id=prop_id,
                 label=f"turnaround_{view}",
                 seed=seed,
+                reference_image_bytes=reference_image_bytes,
             )
             asset_refs["turnaround"].append(ref)
 
@@ -184,6 +212,7 @@ class GCSImageJobRunner(ImageJobRunner):
                 prop_id=prop_id,
                 label=f"callout_{cp.replace(' ', '_')}",
                 seed=seed,
+                reference_image_bytes=reference_image_bytes,
             )
             asset_refs["detail_callouts"].append(ref)
 
@@ -195,6 +224,7 @@ class GCSImageJobRunner(ImageJobRunner):
                 prop_id=prop_id,
                 label=f"variant_{variant}",
                 seed=seed,
+                reference_image_bytes=reference_image_bytes,
             )
             asset_refs["variants"].append(ref)
 
@@ -209,11 +239,16 @@ class GCSImageJobRunner(ImageJobRunner):
         prop_id: str,
         label: str,
         seed: int = 0,
+        reference_image_bytes: bytes | None = None,
     ) -> str:
         """
         Generate one image with the Gen AI SDK, upload to GCS, and return the GCS object path.
         Images are stored as gcs://<bucket>/<prop_id>/<label>/<uuid>.png.
         The API generates signed URLs from these paths — never returns raw bytes.
+
+        When ``reference_image_bytes`` is provided it is attached alongside the text
+        prompt so the model performs image-to-image generation, keeping the output
+        faithful to the approved reference concept.
         """
         from config import GCS_BUCKET_NAME
 
@@ -238,6 +273,14 @@ class GCSImageJobRunner(ImageJobRunner):
             **({"seed": seed} if seed else {}),
         )
 
+        # Build the request contents: text prompt, plus the approved reference image
+        # (image-to-image) when one was supplied.
+        contents: list[Any] = [prompt]
+        if reference_image_bytes:
+            contents.append(
+                genai_types.Part.from_bytes(data=reference_image_bytes, mime_type="image/png")
+            )
+
         # Generate with retry + backoff on 429 / RESOURCE_EXHAUSTED. Final-asset jobs
         # fire several image calls in sequence, and image models can have a low
         # per-minute quota — so we back off and retry rather than fail the whole stage.
@@ -248,7 +291,7 @@ class GCSImageJobRunner(ImageJobRunner):
             try:
                 result = self._client.models.generate_content(
                     model=model_id,
-                    contents=[prompt],
+                    contents=contents,
                     config=config,
                 )
                 break

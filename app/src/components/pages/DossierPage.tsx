@@ -57,6 +57,32 @@ export function DossierPage({
   // data — never fabricated versions/approvers/lenses.
   const isDemo = prop.source === 'demo';
   const isLive = !isDemo && (prop.source === 'live' || prop.id.startsWith('prop_'));
+
+  // Live props: the end-of-Stage-3 physical spec fields are user-fillable and
+  // persist onto the prop (no hardcoded demo values baked in).
+  const updateSpec = (field: string, value: string) => {
+    if (!assets || !onUpdateProp) return;
+    onUpdateProp({
+      ...prop,
+      finalAssets: { ...assets, specTable: { ...assets.specTable, [field]: value } as any },
+    });
+  };
+  const specField = (label: string, field: string, opts?: { accent?: boolean }) => (
+    <div>
+      <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+        {label}
+      </span>
+      <input
+        type="text"
+        value={(assets?.specTable as any)?.[field] ?? ''}
+        placeholder="Add…"
+        onChange={(e) => updateSpec(field, e.target.value)}
+        className={`w-full mt-0.5 bg-[#F7F4EC] dark:bg-[#0E1716] border border-[#D8E5E1] dark:border-[#223735] px-2 py-1 text-xs focus:outline-hidden focus:border-[#12A79D] ${
+          opts?.accent ? 'text-[#12A79D] font-medium' : 'text-[#12201F] dark:text-[#EDF5F3] font-semibold'
+        }`}
+      />
+    </div>
+  );
   const [localViewMode, setLocalViewMode] = useState<PropViewMode>(viewMode);
   const [exportState, setExportState] = useState<'ready' | 'exporting' | 'exported'>(
     assets?.exportStatus === 'Exported ✓' ? 'exported' : 'ready'
@@ -832,68 +858,87 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
             </div>
 
             <div className="space-y-3 font-inter text-xs">
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  Dimensions (Closed / Open)
-                </span>
-                <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">
-                  {assets.specTable.dimensionsClosed} / {assets.specTable.dimensionsOpen}
-                </span>
-              </div>
+              {isLive ? (
+                <>
+                  <p className="font-inter text-[11px] text-[#48605E] dark:text-[#8BA4A1] -mt-1 mb-1">
+                    Fill in the physical spec — changes save to this prop.
+                  </p>
+                  {specField('Dimensions (Closed)', 'dimensionsClosed')}
+                  {specField('Dimensions (Open)', 'dimensionsOpen')}
+                  {specField('Hero Weight', 'weight')}
+                  {specField('Primary Materials', 'materials')}
+                  {specField('Finishes & Weathering', 'finishes')}
+                  {specField('Stunt Safety Variant Spec', 'stuntVariant', { accent: true })}
+                  {specField('Scripted States', 'scriptedStates')}
+                  {specField('On-Set Mechanism', 'mechanism')}
+                  {specField('Caregiving & Camera Prep', 'caregivingNotes')}
+                </>
+              ) : (
+                <>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      Dimensions (Closed / Open)
+                    </span>
+                    <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">
+                      {assets.specTable.dimensionsClosed} / {assets.specTable.dimensionsOpen}
+                    </span>
+                  </div>
 
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  Hero Weight
-                </span>
-                <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">
-                  {assets.specTable.weight}
-                </span>
-              </div>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      Hero Weight
+                    </span>
+                    <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">
+                      {assets.specTable.weight}
+                    </span>
+                  </div>
 
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  Primary Materials
-                </span>
-                <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">
-                  {assets.specTable.materials}
-                </span>
-              </div>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      Primary Materials
+                    </span>
+                    <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">
+                      {assets.specTable.materials}
+                    </span>
+                  </div>
 
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  Finishes & Weathering
-                </span>
-                <span className="text-[#12201F] dark:text-[#EDF5F3] leading-relaxed block">
-                  {assets.specTable.finishes}
-                </span>
-              </div>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      Finishes & Weathering
+                    </span>
+                    <span className="text-[#12201F] dark:text-[#EDF5F3] leading-relaxed block">
+                      {assets.specTable.finishes}
+                    </span>
+                  </div>
 
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  Stunt Safety Variant Spec
-                </span>
-                <span className="text-[#12A79D] font-medium leading-relaxed block">
-                  {assets.specTable.stuntVariant}
-                </span>
-              </div>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      Stunt Safety Variant Spec
+                    </span>
+                    <span className="text-[#12A79D] font-medium leading-relaxed block">
+                      {assets.specTable.stuntVariant}
+                    </span>
+                  </div>
 
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  On-Set Mechanism
-                </span>
-                <span className="text-[#12201F] dark:text-[#EDF5F3] leading-relaxed block">
-                  {assets.specTable.mechanism}
-                </span>
-              </div>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      On-Set Mechanism
+                    </span>
+                    <span className="text-[#12201F] dark:text-[#EDF5F3] leading-relaxed block">
+                      {assets.specTable.mechanism}
+                    </span>
+                  </div>
 
-              <div>
-                <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
-                  Caregiving & Camera Prep
-                </span>
-                <span className="text-[#48605E] dark:text-[#8BA4A1] leading-relaxed block">
-                  {assets.specTable.caregivingNotes}
-                </span>
-              </div>
+                  <div>
+                    <span className="font-mono-tag text-[10px] text-[#48605E] dark:text-[#8BA4A1] uppercase block">
+                      Caregiving & Camera Prep
+                    </span>
+                    <span className="text-[#48605E] dark:text-[#8BA4A1] leading-relaxed block">
+                      {assets.specTable.caregivingNotes}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Export & Download Quick Actions */}

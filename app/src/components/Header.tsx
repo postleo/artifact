@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActiveTab, PropItem, ProductionProfile, PropViewMode } from '../types';
-import { Moon, Sun, SlidersHorizontal, Box, Camera, Film } from 'lucide-react';
+import { Moon, Sun, SlidersHorizontal, Box, Camera, Film, Trash2 } from 'lucide-react';
 
 interface HeaderProps {
   currentTab: ActiveTab;
@@ -13,6 +13,7 @@ interface HeaderProps {
   onOpenOnboarding?: () => void;
   viewMode?: PropViewMode;
   onViewModeChange?: (mode: PropViewMode) => void;
+  onDeleteActiveProp?: () => void;
 }
 
 export function Header({
@@ -25,7 +26,8 @@ export function Header({
   productionProfile,
   onOpenOnboarding,
   viewMode = 'vitrine',
-  onViewModeChange
+  onViewModeChange,
+  onDeleteActiveProp
 }: HeaderProps) {
   return (
     <header className="sticky top-0 z-40 bg-[#F7F4EC] dark:bg-[#0D1514] border-b border-[#D8E5E1] dark:border-[#223735] transition-colors">
@@ -279,6 +281,18 @@ export function Header({
               <span>Active:</span>
               <span className="text-[#12201F] dark:text-[#EDF5F3] font-semibold">{activeProp.name}</span>
               <span className="text-[#12A79D]">({activeProp.id})</span>
+              {onDeleteActiveProp && (
+                <button
+                  type="button"
+                  onClick={onDeleteActiveProp}
+                  className="ml-1 flex items-center gap-1 px-1.5 py-0.5 border border-[#D8E5E1] dark:border-[#223735] text-[#48605E] dark:text-[#8BA4A1] hover:text-red-600 hover:border-red-400 transition-colors cursor-pointer"
+                  title={`Delete ${activeProp.name}`}
+                  aria-label={`Delete ${activeProp.name}`}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Delete</span>
+                </button>
+              )}
             </div>
           )}
         </div>

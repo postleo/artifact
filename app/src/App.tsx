@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ActiveTab, PropItem, ProductionProfile, PropViewMode, HistoryLogEntry } from './types';
 import { INITIAL_PROPS } from './data/propsData';
 import { Header } from './components/Header';
@@ -83,11 +83,16 @@ export default function App() {
     return () => window.removeEventListener('artifact-unauthorized', onUnauthorized);
   }, []);
 
+  // Guards the auto-save safety net below: false until the initial load finishes,
+  // so we never persist the pre-load empty slate over real stored data.
+  const hydratedRef = useRef<boolean>(false);
+
   // Load persisted studio state (profile + props) from the backend DB on mount
   // (only once authenticated).
   useEffect(() => {
     if (!authed) return;
     let cancelled = false;
+    hydratedRef.current = false; // disable auto-save while (re)loading
     (async () => {
       try {
         const [profile, props] = await Promise.all([getStudioProfile(), getStudioProps()]);
@@ -105,13 +110,27 @@ export default function App() {
       } catch (e) {
         console.error('Failed to load studio state from backend:', e);
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          hydratedRef.current = true; // load done → auto-save may persist changes
+          setIsLoading(false);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [authed]);
+
+  // Auto-save safety net: whenever the props slate changes after the initial load,
+  // persist it (debounced). The per-action saves already fire immediately; this is
+  // a backstop so a new generation can never be lost to a missed/raced save.
+  useEffect(() => {
+    if (!authed || !hydratedRef.current) return;
+    const t = setTimeout(() => {
+      void saveStudioProps(propsList);
+    }, 700);
+    return () => clearTimeout(t);
+  }, [propsList, authed]);
 
   // Dual view mode: 'vitrine' (museum showcase) vs 'photo_artifact' (clean production photo)
   const [viewMode, setViewMode] = useState<PropViewMode>(() => {

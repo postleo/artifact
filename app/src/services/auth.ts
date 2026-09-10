@@ -27,8 +27,28 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+/**
+ * True only when a token exists AND (if it's a decodable JWT) it has not expired.
+ * This prevents the confusing "logged-in but every API write silently 401s" state
+ * that can happen after the 12h token expires — which previously caused
+ * newly-created props to fail to save and vanish on reload.
+ */
 export function isAuthenticated(): boolean {
-  return Boolean(getToken());
+  const token = getToken();
+  if (!token) return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return true; // non-JWT (e.g. the 'dev' token when auth is disabled)
+  try {
+    const json = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const payload = JSON.parse(json) as { exp?: number };
+    if (typeof payload.exp === 'number') {
+      // Treat as expired a minute early to avoid races on in-flight requests.
+      return payload.exp * 1000 > Date.now() + 60_000;
+    }
+    return true;
+  } catch {
+    return true; // can't decode → don't lock the user out; the server still verifies
+  }
 }
 
 /** Authorization header for API calls (empty object when not logged in). */

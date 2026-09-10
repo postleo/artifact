@@ -28,7 +28,12 @@ export function SelectionPage({
     onViewModeChange?.(mode);
   };
 
-  const decision = prop.decision || {
+  const isDemo = prop.source === 'demo';
+  const isLive = !isDemo && (prop.source === 'live' || prop.id.startsWith('prop_'));
+
+  // Demo props keep their showcase decision (rich approver panel + notes). Live
+  // props only ever show the real recorded decision — never a fabricated one.
+  const demoDecision = {
     optionId: selectedOption?.id || 'A',
     whyWeChoseThis:
       selectedOption?.rationale ||
@@ -62,14 +67,27 @@ export function SelectionPage({
     ]
   };
 
+  const liveDecision = {
+    optionId: selectedOption?.id || 'A',
+    whyWeChoseThis: selectedOption?.rationale || 'Selected as the strongest direction for this hero prop.',
+    date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    approvers: [] as { name: string; role: string; avatar: string }[],
+    notes: [] as string[],
+  };
+
+  const decision = prop.decision || (isDemo ? demoDecision : liveDecision);
+
   const [isBuilding, setIsBuilding] = useState(false);
+  // For live props, the "Build final asset package" step (finalize) cannot start
+  // until the option selection has actually been confirmed with the agent.
+  const canBuild = !isLive || !!prop.selectionSynced;
 
   const handleBuildClick = () => {
+    if (!canBuild) return;
     setIsBuilding(true);
-    setTimeout(() => {
-      setIsBuilding(false);
-      onBuildFinalAssets();
-    }, 1000);
+    // Kick off the real job immediately; the parent flips the prop to a
+    // generating state and navigates to the dossier (this view unmounts).
+    onBuildFinalAssets();
   };
 
   return (
@@ -209,13 +227,29 @@ export function SelectionPage({
               APPROVED BY
             </h3>
             <div className="flex flex-wrap gap-6">
+              {decision.approvers.length === 0 && (
+                <div className="font-inter text-xs text-[#48605E] dark:text-[#8BA4A1]">
+                  Recorded in the studio.
+                </div>
+              )}
               {decision.approvers.map((approver, idx) => (
                 <div key={idx} className="flex items-center gap-2.5">
-                  <img
-                    src={approver.avatar}
-                    alt={approver.name}
-                    className="w-8 h-8 rounded-full object-cover border border-[#D8E5E1] dark:border-[#223735]"
-                  />
+                  {approver.avatar ? (
+                    <img
+                      src={approver.avatar}
+                      alt={approver.name}
+                      className="w-8 h-8 rounded-full object-cover border border-[#D8E5E1] dark:border-[#223735]"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-[#12A79D]/15 border border-[#12A79D]/30 flex items-center justify-center font-mono-tag text-[11px] font-bold text-[#0B5F5A] dark:text-[#38C7BD]">
+                      {approver.name
+                        .split(' ')
+                        .map((s) => s[0])
+                        .slice(0, 2)
+                        .join('')
+                        .toUpperCase() || '—'}
+                    </div>
+                  )}
                   <div>
                     <div className="font-inter text-xs font-semibold text-[#12201F] dark:text-[#EDF5F3]">
                       {approver.name}
@@ -256,17 +290,34 @@ export function SelectionPage({
 
           {/* Primary Action Button: Build final asset package */}
           <div className="pt-4 border-t border-[#D8E5E1] dark:border-[#223735]">
+            {isLive && !canBuild && !prop.pipelineError && (
+              <p className="font-inter text-xs text-[#48605E] dark:text-[#8BA4A1] mb-2 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#12A79D] animate-pulse" />
+                Recording your selection with the generation service…
+              </p>
+            )}
+            {prop.pipelineError && (
+              <p className="font-inter text-xs text-amber-700 dark:text-amber-300 mb-2">
+                {prop.pipelineError}
+              </p>
+            )}
             <button
               type="button"
-              disabled={isBuilding}
+              disabled={isBuilding || !canBuild}
               onClick={handleBuildClick}
-              className="w-full sm:w-auto bg-[#12A79D] hover:bg-[#0B5F5A] text-white px-8 py-3.5 text-xs font-mono-tag font-bold uppercase tracking-wider transition-colors shadow-sm cursor-pointer flex items-center justify-center gap-2"
+              className={`w-full sm:w-auto px-8 py-3.5 text-xs font-mono-tag font-bold uppercase tracking-wider transition-colors shadow-sm flex items-center justify-center gap-2 ${
+                isBuilding || !canBuild
+                  ? 'bg-[#12A79D]/50 text-white/80 cursor-not-allowed'
+                  : 'bg-[#12A79D] hover:bg-[#0B5F5A] text-white cursor-pointer'
+              }`}
             >
               {isBuilding ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                  <span>Compiling Turnarounds & Fabrication Specs...</span>
+                  <span>Starting final asset generation…</span>
                 </>
+              ) : !canBuild ? (
+                <span>Recording selection…</span>
               ) : (
                 <span>Build final asset package</span>
               )}

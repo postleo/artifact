@@ -52,6 +52,11 @@ export function DossierPage({
   onViewModeChange
 }: DossierPageProps) {
   const assets = prop.finalAssets;
+  // Demo props keep their rich showcase metadata (versions, scene timeline,
+  // franchise bible, camera package). Live props only ever show real recorded
+  // data — never fabricated versions/approvers/lenses.
+  const isDemo = prop.source === 'demo';
+  const isLive = !isDemo && (prop.source === 'live' || prop.id.startsWith('prop_'));
   const [localViewMode, setLocalViewMode] = useState<PropViewMode>(viewMode);
   const [exportState, setExportState] = useState<'ready' | 'exporting' | 'exported'>(
     assets?.exportStatus === 'Exported ✓' ? 'exported' : 'ready'
@@ -66,6 +71,8 @@ export function DossierPage({
   // Version management
   const availableVersions: AssetVersion[] = prop.versions && prop.versions.length > 0
     ? prop.versions
+    : !isDemo
+    ? []
     : [
         {
           versionId: 'v1.0-HERO',
@@ -114,6 +121,8 @@ export function DossierPage({
   // Scene Usage Records
   const sceneTimeline: SceneUsageRecord[] = prop.sceneUsageTimeline && prop.sceneUsageTimeline.length > 0
     ? prop.sceneUsageTimeline
+    : !isDemo
+    ? []
     : [
         {
           sceneId: 'sc-14',
@@ -149,7 +158,15 @@ export function DossierPage({
       ];
 
   // Franchise Continuity Bible
-  const franchiseBible: FranchiseContinuityBible = prop.franchiseContinuity || {
+  const liveFranchiseBible: FranchiseContinuityBible = {
+    filmCanonBaseline:
+      'No franchise continuity has been recorded for this prop yet. Once the hero prop is locked, canon constraints and permitted sequel evolutions can be captured here.',
+    strictContinuityConstraints: [],
+    allowedSequelEvolutions: [],
+    sequelWarningAlerts: [],
+    previousFilmsReferences: [],
+  };
+  const franchiseBible: FranchiseContinuityBible = prop.franchiseContinuity || (isDemo ? {
     filmCanonBaseline: `Film 1 established ${prop.name} as an authentic in-world artifact in ${prop.world} (${prop.era}) with specific mechanical traits: ${prop.functionOnScreen}.`,
     strictContinuityConstraints: [
       'CORE SILHOUETTE & ENGRAVED RUNES: The celestial coordinates engraved on the outer brass ring are locked narrative canon. Must NOT be altered in sequels.',
@@ -172,7 +189,7 @@ export function DossierPage({
         keyMoments: 'Unlocking the vault gate at the temple zenith.'
       }
     ]
-  };
+  } : liveFranchiseBible);
 
   // New log entry state
   const [newLogNote, setNewLogNote] = useState('');
@@ -186,7 +203,7 @@ export function DossierPage({
   const [newSceneNotes, setNewSceneNotes] = useState('');
 
   // Fallback default metadata if not set
-  const exportMeta: ExportMetadata = prop.exportMetadata || {
+  const exportMeta: ExportMetadata = prop.exportMetadata || (isDemo ? {
     slateCode: `PRP-${prop.id.replace('ARF-', '')}-HRO-${prop.sceneNumber || 'SC01'}-V1`,
     sceneCues: `${prop.sceneNumber || 'SCENE 14'} · SLATE 04 · ROLL B`,
     rollTake: 'ROLL 04 / TAKE 02',
@@ -198,10 +215,24 @@ export function DossierPage({
     version: selectedVersionId,
     stuntDurometer: 'Shore 45A Soft Urethane Duplicate',
     damDestination: assets?.libraryDestination || `/Library/Props/${prop.id}_${prop.name.replace(/\s+/g, '_')}`
-  };
+  } : {
+    // Honest placeholders for live props — the camera/color package is only
+    // filled in once the production actually records it, so we don't fabricate it.
+    slateCode: `PRP-${prop.id.replace('ARF-', '').replace('prop_', '')}-HRO`,
+    sceneCues: prop.sceneNumber || '—',
+    rollTake: '—',
+    cameraLens: 'Not recorded',
+    colorSpace: 'Not recorded',
+    aspectRatio: 'Not recorded',
+    lutTarget: 'Not recorded',
+    checksum: '—',
+    version: selectedVersionId || 'v1',
+    stuntDurometer: 'Not recorded',
+    damDestination: assets?.libraryDestination || `/Library/Props/${prop.id}_${prop.name.replace(/\s+/g, '_')}`
+  });
 
   // Fallback history if not present
-  const historyLogs: HistoryLogEntry[] = prop.history || [
+  const historyLogs: HistoryLogEntry[] = prop.history || (isDemo ? [
     {
       id: 'hist-init',
       timestamp: 'May 12, 2024 · 09:15 AM',
@@ -238,7 +269,7 @@ export function DossierPage({
       notes: '4-angle turnarounds, 6 macro callout plates, and CMF table verified.',
       type: 'dossier'
     }
-  ];
+  ] : []);
 
   const handleToggleMode = (mode: PropViewMode) => {
     setLocalViewMode(mode);
@@ -451,6 +482,104 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
   };
 
   if (!assets) {
+    const building = prop.status === 'generating';
+    const failed = prop.status === 'failed' || prop.status === 'budget_exceeded';
+
+    // Live prop actively building its final assets (or hit an error): show the
+    // real building state with placeholders that fill in as deliverables land —
+    // never a fabricated dossier. Text specs (materials / mechanism) surface as
+    // soon as the agent produces them, before the images finish.
+    if (isLive && (building || failed)) {
+      const specMaterials = (prop as any).finalAssets?.specTable?.materials as string | undefined;
+      const specMechanism = (prop as any).finalAssets?.specTable?.mechanism as string | undefined;
+      return (
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          <button
+            type="button"
+            onClick={onBackToSelection}
+            className="font-mono-tag text-xs text-[#48605E] dark:text-[#8BA4A1] hover:text-[#12201F] dark:hover:text-[#EDF5F3] flex items-center gap-1.5 transition-colors mb-3 cursor-pointer"
+          >
+            ← Back to Gate 2 (Selection)
+          </button>
+          <h1 className="font-fraunces text-3xl font-bold text-[#12201F] dark:text-[#EDF5F3] mb-1">
+            {prop.name}
+          </h1>
+          <p className="font-inter text-sm text-[#48605E] dark:text-[#8BA4A1] mb-6">
+            {failed
+              ? 'Final asset generation did not complete.'
+              : 'Building the final asset package — turnarounds and fabrication callouts appear here as they render.'}
+          </p>
+
+          {failed ? (
+            <div className="max-w-xl bg-amber-500/10 border border-amber-500/40 p-5">
+              <p className="font-inter text-sm text-amber-900 dark:text-amber-200 mb-4">
+                {prop.pipelineError || 'Generation hit an error. Please try again.'}
+              </p>
+              <button
+                type="button"
+                onClick={onBackToSelection}
+                className="bg-[#12A79D] hover:bg-[#0B5F5A] text-white px-5 py-2 text-xs font-mono-tag font-bold uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Back to selection &amp; retry
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-8">
+              <div>
+                <h3 className="font-mono-tag text-xs font-semibold text-[#12201F] dark:text-[#EDF5F3] uppercase tracking-wider mb-3">
+                  Turnarounds (4 angles)
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {['FRONT', 'SIDE', 'BACK', 'THREE-QUARTER'].map((angle) => (
+                    <div key={angle} className="bg-white dark:bg-[#14201E] border border-[#D8E5E1] dark:border-[#223735] p-2">
+                      <div className="aspect-square w-full bg-[#F7F4EC] dark:bg-[#0E1716] animate-pulse" />
+                      <div className="pt-2 text-center font-mono-tag text-[11px] font-bold text-[#48605E]/70 dark:text-[#8BA4A1]/70 uppercase tracking-wider">
+                        {angle}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-mono-tag text-xs font-semibold text-[#12201F] dark:text-[#EDF5F3] uppercase tracking-wider mb-3">
+                  Fabrication callouts
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="bg-white dark:bg-[#14201E] border border-[#D8E5E1] dark:border-[#223735] p-2">
+                      <div className="aspect-video w-full bg-[#F7F4EC] dark:bg-[#0E1716] animate-pulse" />
+                      <div className="mt-2 h-3 w-2/3 bg-[#F7F4EC] dark:bg-[#0E1716] animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {(specMaterials || specMechanism) && (
+                <div className="bg-white dark:bg-[#14201E] border border-[#D8E5E1] dark:border-[#223735] p-4">
+                  <h3 className="font-mono-tag text-xs font-semibold text-[#12201F] dark:text-[#EDF5F3] uppercase tracking-wider mb-2">
+                    Build spec (drafted)
+                  </h3>
+                  {specMaterials && (
+                    <p className="font-inter text-xs text-[#48605E] dark:text-[#8BA4A1] mb-1">
+                      <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">Materials: </span>
+                      {specMaterials}
+                    </p>
+                  )}
+                  {specMechanism && (
+                    <p className="font-inter text-xs text-[#48605E] dark:text-[#8BA4A1]">
+                      <span className="font-semibold text-[#12201F] dark:text-[#EDF5F3]">Mechanism: </span>
+                      {specMechanism}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="max-w-7xl mx-auto px-6 py-12 text-center">
         <h2 className="font-fraunces text-2xl text-[#12201F] dark:text-[#EDF5F3] mb-4">
@@ -504,14 +633,16 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
 
           {/* Catalogue Entry Box & Active Version */}
           <div className="bg-white dark:bg-[#14201E] border border-[#D8E5E1] dark:border-[#223735] p-3 sm:text-right min-w-[240px] transition-colors shadow-xs">
-            <div className="flex items-center sm:justify-end gap-2 mb-1">
-              <span className="font-mono-tag text-[10px] font-bold text-[#48605E] dark:text-[#8BA4A1] uppercase tracking-wider">
-                ACTIVE VERSION:
-              </span>
-              <span className="font-mono-tag text-xs font-bold text-[#12A79D] px-2 py-0.5 bg-[#12A79D]/15">
-                {selectedVersionId}
-              </span>
-            </div>
+            {availableVersions.length > 0 && (
+              <div className="flex items-center sm:justify-end gap-2 mb-1">
+                <span className="font-mono-tag text-[10px] font-bold text-[#48605E] dark:text-[#8BA4A1] uppercase tracking-wider">
+                  ACTIVE VERSION:
+                </span>
+                <span className="font-mono-tag text-xs font-bold text-[#12A79D] px-2 py-0.5 bg-[#12A79D]/15">
+                  {selectedVersionId}
+                </span>
+              </div>
+            )}
             <div className="font-mono-tag text-[11px] text-[#48605E] dark:text-[#8BA4A1]">
               Created: {assets.createdDate} · Updated: {assets.updatedDate}
             </div>
@@ -522,6 +653,7 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
         </div>
 
         {/* ASSET VERSIONING SELECTOR BAR */}
+        {availableVersions.length > 0 && (
         <div className="mt-4 pt-3 border-t border-[#D8E5E1]/60 dark:border-[#223735]/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono-tag text-[11px] font-bold text-[#48605E] dark:text-[#8BA4A1] uppercase flex items-center gap-1.5">
@@ -551,9 +683,10 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
           </div>
 
           <div className="text-[11px] font-mono-tag text-[#48605E] dark:text-[#8BA4A1] truncate">
-            Status: <strong className="text-[#12201F] dark:text-[#EDF5F3]">{currentVersionObj.status}</strong> · {currentVersionObj.changelog}
+            Status: <strong className="text-[#12201F] dark:text-[#EDF5F3]">{currentVersionObj?.status}</strong> · {currentVersionObj?.changelog}
           </div>
         </div>
+        )}
       </div>
 
       {/* PRIMARY SECTION: IMAGES OF THE PROP & KEY PRODUCTION DETAILS */}
@@ -889,10 +1022,10 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
                     Authorized Sign-Off Approvers
                   </h5>
                   <div className="flex flex-wrap gap-2">
-                    {(prop.decision?.approvers || [
+                    {(prop.decision?.approvers || (isDemo ? [
                       { name: 'Isla Venn', role: 'Art Director' },
                       { name: 'Rohan Patel', role: 'Creative Director' }
-                    ]).map((approver, idx) => (
+                    ] : [])).map((approver, idx) => (
                       <div
                         key={idx}
                         className="px-3 py-1.5 bg-[#F7F4EC] dark:bg-[#0E1716] border border-[#D8E5E1] dark:border-[#223735] flex items-center gap-2 text-xs"
@@ -911,12 +1044,12 @@ ${franchiseBible.allowedSequelEvolutions.map((e) => `- ${e}`).join('\n')}
                   Fabrication & On-Set Notes
                 </h4>
                 <ul className="space-y-2 text-xs font-inter text-[#48605E] dark:text-[#8BA4A1]">
-                  {(prop.decision?.notes || [
+                  {(prop.decision?.notes || (isDemo ? [
                     'Open structure supports key lighting moments on actors\' faces',
                     'Outer ring can carry runes for storytelling and lore hints',
                     'Stunt variant will replace sharp finials with rounded caps',
                     'Mechanism to include subtle magnetic resistance for tactile feel'
-                  ]).map((note, idx) => (
+                  ] : [])).map((note, idx) => (
                     <li key={idx} className="flex items-start gap-2 bg-[#F7F4EC] dark:bg-[#0E1716] p-2.5 border border-[#D8E5E1] dark:border-[#223735]">
                       <span className="text-[#12A79D] font-bold">•</span>
                       <span>{note}</span>

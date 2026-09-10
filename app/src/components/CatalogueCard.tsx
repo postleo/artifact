@@ -49,17 +49,26 @@ export function CatalogueCard({ prop, onClick, viewMode = 'vitrine' }: Catalogue
           </>
         )}
 
-        {/* Thumbnail */}
-        <img
-          src={prop.thumbnailUrl}
-          alt={prop.name}
-          className={`w-full h-full object-contain p-2 transition-transform duration-300 ${
-            isVitrine
-              ? 'group-hover:scale-105'
-              : 'group-hover:scale-106 drop-shadow-md'
-          }`}
-          loading="lazy"
-        />
+        {/* Thumbnail (or a neutral placeholder while a live prop is still generating) */}
+        {prop.thumbnailUrl ? (
+          <img
+            src={prop.thumbnailUrl}
+            alt={prop.name}
+            className={`w-full h-full object-contain p-2 transition-transform duration-300 ${
+              isVitrine
+                ? 'group-hover:scale-105'
+                : 'group-hover:scale-106 drop-shadow-md'
+            }`}
+            loading="lazy"
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-[#48605E]/50 dark:text-[#8BA4A1]/50">
+            <Camera className="w-6 h-6" />
+            <span className="font-mono-tag text-[9px] uppercase tracking-wider">
+              {prop.status === 'generating' ? 'Rendering…' : 'No image yet'}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Prop Information */}

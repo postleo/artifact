@@ -374,6 +374,13 @@ export default function App() {
         ...p,
         selectedOptionId: optionId,
         status: 'awaiting_review' as const,
+        // Catalogue thumbnail now follows the chosen option's image once one is
+        // selected (falls back to whatever it was — the first/random image — when
+        // nothing is selected yet).
+        thumbnailUrl:
+          chosen?.imageUrl && !chosen.imageUrl.startsWith('https://images.unsplash')
+            ? chosen.imageUrl
+            : p.thumbnailUrl,
         // For live props the selection isn't confirmed with the agent until the
         // request below succeeds; the Build button stays disabled until then.
         selectionSynced: live ? false : true,
@@ -487,6 +494,29 @@ export default function App() {
     }
   };
 
+  // Delete a prop from the production slate (works from the catalogue and while
+  // actively working on it). Removes it from the persisted slate; if the active
+  // prop is deleted, fall back to the catalogue. (There is no server-side delete
+  // endpoint — the slate the studio sees is the source of truth here.)
+  const handleDeleteProp = (id: string) => {
+    const prop = propsList.find((p) => p.id === id);
+    const label = prop ? `${prop.name} (${prop.id})` : id;
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(`Delete "${label}"?\n\nThis removes it from your production slate and can't be undone.`)
+    ) {
+      return;
+    }
+    const remaining = propsList.filter((p) => p.id !== id);
+    setPropsList(remaining);
+    void saveStudioProps(remaining);
+    if (activePropId === id) {
+      const next = remaining[0];
+      setActivePropId(next ? next.id : '');
+      setCurrentTab('catalogue');
+    }
+  };
+
   // Render empty prop notice if navigating to prop-specific views with 0 props
   const renderEmptyPropNotice = () => (
     <div className="max-w-2xl mx-auto my-16 p-8 bg-white dark:bg-[#14201E] border border-[#D8E5E1] dark:border-[#223735] text-center shadow-xs">
@@ -546,6 +576,7 @@ export default function App() {
         onOpenOnboarding={() => setIsOnboardingOpen(true)}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
+        onDeleteActiveProp={activeProp ? () => handleDeleteProp(activeProp.id) : undefined}
       />
 
       {/* Main Content View Container */}
@@ -561,6 +592,7 @@ export default function App() {
             onOpenOnboarding={() => setIsOnboardingOpen(true)}
             viewMode={viewMode}
             onViewModeChange={handleViewModeChange}
+            onDeleteProp={handleDeleteProp}
           />
         )}
 

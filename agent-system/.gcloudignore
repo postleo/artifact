@@ -1,0 +1,8 @@
+# Keep the Cloud Build upload lean.
+.git/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.log
+.DS_Store

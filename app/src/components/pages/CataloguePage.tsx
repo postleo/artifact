@@ -12,6 +12,7 @@ interface CataloguePageProps {
   onOpenOnboarding?: () => void;
   viewMode?: PropViewMode;
   onViewModeChange?: (mode: PropViewMode) => void;
+  onDeleteProp?: (id: string) => void;
 }
 
 type SortOption = 'newest' | 'oldest' | 'name_asc' | 'cost_desc';
@@ -24,7 +25,8 @@ export function CataloguePage({
   onResetDemo,
   onOpenOnboarding,
   viewMode = 'vitrine',
-  onViewModeChange
+  onViewModeChange,
+  onDeleteProp
 }: CataloguePageProps) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [worldFilter, setWorldFilter] = useState<string>('all');
@@ -387,6 +389,7 @@ export function CataloguePage({
               prop={prop}
               onClick={() => onSelectProp(prop)}
               viewMode={viewMode}
+              onDelete={onDeleteProp ? () => onDeleteProp(prop.id) : undefined}
             />
           ))}
         </div>
